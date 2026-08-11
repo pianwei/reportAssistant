@@ -1,0 +1,135 @@
+.guess-card > button {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+}
+
+.suggestion-icon {
+  color: #1760b2;
+  font-weight: 800;
+}
+
+.quick-confirm {
+  flex-wrap: wrap;
+}
+
+.quick-confirm .finish-action {
+  color: #fff;
+  background: #1760b2;
+  border-color: #1760b2;
+}
+
+.recommend-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.related-btn {
+  padding: 8px 11px;
+  margin-top: 10px;
+  color: #1760b2;
+  background: #edf5ff;
+  border: 0;
+  border-radius: 9px;
+}
+
+.intent-label {
+  display: block;
+  width: max-content;
+  padding: 3px 7px;
+  margin-bottom: 7px;
+  font-size: 10px;
+  color: #1760b2;
+  background: #edf5ff;
+  border-radius: 7px;
+}
+
+.guide-card {
+  padding: 14px;
+  margin-left: 12px;
+  background: linear-gradient(135deg, #f7fbff, #edf5ff);
+  border: 1px solid #dbe9f8;
+  border-radius: 15px;
+}
+
+.guide-card b,
+.guide-card small {
+  display: block;
+}
+
+.guide-card button {
+  display: block;
+  width: 100%;
+  padding: 9px 11px;
+  margin: 7px 0;
+  color: #285b96;
+  text-align: left;
+  background: #fff;
+  border: 0;
+  border-radius: 9px;
+}
+
+.guide-card small {
+  margin-top: 9px;
+  color: #7a8a9d;
+}
+
+.statistic-card {
+  padding: 17px;
+  background: #fff;
+  border-radius: 18px;
+  box-shadow: 0 7px 24px #173d6812;
+}
+
+.statistic-card > div {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.statistic-card strong {
+  font-size: 30px;
+  color: #1760b2;
+}
+
+.statistic-card ul {
+  padding: 0;
+  margin: 12px 0 0;
+  list-style: none;
+}
+
+.statistic-card li {
+  display: grid;
+  grid-template-columns: 100px 1fr 25px;
+  gap: 8px;
+  align-items: center;
+  margin: 9px 0;
+  font-size: 12px;
+}
+
+.statistic-card i {
+  height: 7px;
+  background: #edf2f7;
+  border-radius: 7px;
+}
+
+.statistic-card u {
+  display: block;
+  height: 100%;
+  background: #2d78cb;
+  border-radius: 7px;
+}
+
+.answer-note {
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #7a5b18;
+  background: #fff7e4;
+  border-radius: 10px;
+}
+
+.message .bubble .intent-label + * {
+  margin-top: 0;
+}

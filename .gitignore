@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+runtime/
+frontend/node_modules/
+frontend/dist/
+.playwright-cli/
+output/
+*.db
+*.log
+frontend/coverage/
+ops-basic-auth-password.txt

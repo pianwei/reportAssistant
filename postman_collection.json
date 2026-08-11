@@ -1,0 +1,88 @@
+{
+  "info": {
+    "name": "尽调报告助手 API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key": "base_url", "value": "http://127.0.0.1:8000/api/v1"},
+    {"key": "user_id", "value": "postman-user"},
+    {"key": "session_id", "value": ""}
+  ],
+  "item": [
+    {
+      "name": "健康检查",
+      "request": {"method": "GET", "url": "{{base_url}}/health"}
+    },
+    {
+      "name": "移动端初始化",
+      "request": {"method": "GET", "url": "{{base_url}}/ui/bootstrap?user_id={{user_id}}"}
+    },
+    {
+      "name": "新建聊天",
+      "event": [{"listen": "test", "script": {"exec": ["const body = pm.response.json();", "if (body.session_id) pm.collectionVariables.set('session_id', body.session_id);"]}}],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"message\": \"请推荐适合科学研究和技术服务业小微企业的尽调报告\"\n}"},
+        "url": "{{base_url}}/chat"
+      }
+    },
+    {
+      "name": "继续聊天",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {"mode": "raw", "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"message\": \"申请300万元流动资金贷款\"\n}"},
+        "url": "{{base_url}}/chat"
+      }
+    },
+    {
+      "name": "统一聊天-报告筛选",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"message\": \"筛选主营室内空气治理的报告\"\n}"},
+        "url": "{{base_url}}/chat"
+      }
+    },
+    {
+      "name": "统一聊天-数据统计",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"message\": \"哪个行业的报告最多？\"\n}"},
+        "url": "{{base_url}}/chat"
+      }
+    },
+    {
+      "name": "统一聊天-比赛问答",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"message\": \"比赛要求是什么？\"\n}"},
+        "url": "{{base_url}}/chat"
+      }
+    },
+    {
+      "name": "猜你想问",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{user_id}}\"\n}"},
+        "url": "{{base_url}}/suggestions"
+      }
+    },
+    {
+      "name": "运营指标",
+      "request": {"method": "GET", "url": "{{base_url}}/ops/metrics"}
+    },
+    {
+      "name": "运营对话历史",
+      "request": {"method": "GET", "url": "{{base_url}}/ops/conversations?limit=20"}
+    },
+    {
+      "name": "模型状态",
+      "request": {"method": "GET", "url": "{{base_url}}/ops/model-status"}
+    }
+  ]
+}
