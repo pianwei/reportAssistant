@@ -75,19 +75,15 @@ def test_keyword_router_falls_back_when_model_is_unavailable(data_dir, tmp_path)
     assert response.json()["statistic"]["value"] == 1
 
 
-def test_skip_refinement_keeps_result_and_ends_optional_question(data_dir, tmp_path):
+def test_greeting_uses_fixed_capability_message_without_model_routing(data_dir, tmp_path):
     app = create_app(settings_for(data_dir, tmp_path), IntentExtractor())
     with TestClient(app) as client:
-        first = client.post("/api/v1/chat", json={
-            "user_id": "alice", "message": "推荐几个报告"
+        response = client.post("/api/v1/chat", json={
+            "user_id": "alice", "message": "您好"
         }).json()
-        second = client.post("/api/v1/chat", json={
-            "session_id": first["session_id"], "action": {"type": "skip_refinement"}
-        }).json()
-    assert first["status"] == "recommendations"
-    assert second["status"] == "recommendations"
-    assert second["follow_up"] is None
-    assert "保留当前结果" in second["assistant_message"]
+    assert response["status"] == "greeting"
+    assert response["intent"] == "greeting"
+    assert "推荐或筛选尽调报告" in response["assistant_message"]
 
 
 def test_unsupported_question_is_politely_rejected(data_dir, tmp_path):
@@ -97,7 +93,21 @@ def test_unsupported_question_is_politely_rejected(data_dir, tmp_path):
             "user_id": "alice", "message": "今天天气如何？"
         }).json()
     assert response["status"] == "unsupported"
-    assert "推荐、筛选报告" in response["assistant_message"]
+    assert "超出了我目前的回答范围" in response["assistant_message"]
+    assert "推荐或筛选尽调报告" in response["assistant_message"]
+
+
+def test_competition_qa_requires_explicit_competition_context(data_dir, tmp_path):
+    class MisclassifiedQA:
+        async def extract(self, history, message, expected_tag=None):
+            return ModelExtraction(intent="competition_qa", tags=[])
+
+    app = create_app(settings_for(data_dir, tmp_path), MisclassifiedQA())
+    with TestClient(app) as client:
+        response = client.post("/api/v1/chat", json={
+            "user_id": "alice", "message": "量子计算是什么？"
+        }).json()
+    assert response["status"] == "unsupported"
 
 
 def test_related_reports_excludes_source_report(data_dir, tmp_path):

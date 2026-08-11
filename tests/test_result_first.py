@@ -18,8 +18,15 @@ class ResultExtractor:
                 tags.append({"name":"行业分类","value":"制造业","evidence":"制造业","confidence":1})
             if "小微" in message:
                 tags.append({"name":"企业规模","value":"小微企业","evidence":"小微企业","confidence":1})
+            if "大型" in message:
+                tags.append({"name":"企业规模","value":"大型企业","evidence":"大型企业","confidence":1})
             return ModelExtraction.model_validate({"intent":"report_filter","tags":tags})
         return ModelExtraction(intent="report_recommendation", tags=[])
+
+
+class UnsupportedExtractor:
+    async def extract(self, history, message, expected_tag=None):
+        return ModelExtraction(intent="unsupported", tags=[])
 
 
 def _tags(industry: str, size: str, product: str = "流动资金贷款") -> list[dict]:
@@ -30,7 +37,7 @@ def _tags(industry: str, size: str, product: str = "流动资金贷款") -> list
     ]
 
 
-def _app_with_reports(data_dir, tmp_path):
+def _app_with_reports(data_dir, tmp_path, extractor=None):
     reports=[
         make_report("r1","制造小微一",_tags("制造业","小微企业")),
         make_report("r2","制造小微二",_tags("制造业","小微企业","固定资产贷款")),
@@ -39,18 +46,39 @@ def _app_with_reports(data_dir, tmp_path):
         make_report("r5","零售小微",_tags("批发和零售业","小微企业")),
     ]
     (data_dir/"report.json").write_text(json.dumps(reports,ensure_ascii=False),encoding="utf-8")
-    return create_app(settings_for(data_dir,tmp_path),ResultExtractor())
+    return create_app(settings_for(data_dir,tmp_path),extractor or ResultExtractor())
 
 
-def test_no_condition_recommendation_returns_top3_and_distinguishing_options(data_dir,tmp_path):
+def test_no_condition_recommendation_returns_top3(data_dir,tmp_path):
     app=_app_with_reports(data_dir,tmp_path)
     with TestClient(app) as client:
         payload=client.post("/api/v1/chat",json={"user_id":"u1","message":"推荐报告"}).json()
     assert payload["status"] == "recommendations"
     assert len(payload["recommendations"]) == 3
-    assert payload["follow_up"]["kind"] == "preference"
-    values=[option["value"] for group in payload["follow_up"]["groups"] for option in group["options"]]
-    assert len(values) == len(set(values))
+
+
+def test_rule_extraction_fills_explicit_tag_omitted_by_model(data_dir,tmp_path):
+    app=_app_with_reports(data_dir,tmp_path)
+    with TestClient(app) as client:
+        payload=client.post(
+            "/api/v1/chat",
+            json={"user_id":"rule-fill","message":"给我推荐几个小微企业的报告"},
+        ).json()
+    assert payload["collected_tags"][0]["name"] == "企业规模"
+    assert payload["collected_tags"][0]["value"] == "小微企业"
+    assert all(item["score"] == 100 for item in payload["recommendations"])
+    assert all(item["matched_tags"][0]["name"] == "企业规模" for item in payload["recommendations"])
+
+
+def test_explicit_recommendation_keywords_override_model_unsupported(data_dir,tmp_path):
+    app=_app_with_reports(data_dir,tmp_path,UnsupportedExtractor())
+    with TestClient(app) as client:
+        payload=client.post(
+            "/api/v1/chat",
+            json={"user_id":"route-fallback","message":"给我推荐几个小微企业的报告"},
+        ).json()
+    assert payload["status"] == "recommendations"
+    assert payload["collected_tags"][0]["value"] == "小微企业"
 
 
 def test_single_filter_returns_all_and_multiple_tags_are_strict_and(data_dir,tmp_path):
@@ -63,27 +91,20 @@ def test_single_filter_returns_all_and_multiple_tags_are_strict_and(data_dir,tmp
     assert {x["report_id"] for x in two["recommendations"]} == {"r1","r2"}, two
 
 
-def test_apply_multi_refinement_skip_and_three_round_limit(data_dir,tmp_path):
+def test_user_can_replace_filter_conditions_by_sending_a_new_question(data_dir,tmp_path):
     app=_app_with_reports(data_dir,tmp_path)
     with TestClient(app) as client:
-        first=client.post("/api/v1/chat",json={"user_id":"u1","message":"推荐报告"}).json()
+        first=client.post("/api/v1/chat",json={"user_id":"u1","message":"筛选制造业大型企业报告"}).json()
         session=first["session_id"]
-        action={"type":"apply_refinement","selections":[{"tag_name":"行业分类","value":"制造业"},{"tag_name":"企业规模","value":"小微企业"}]}
-        current=client.post("/api/v1/chat",json={"session_id":session,"action":action}).json()
-        assert {x["name"] for x in current["collected_tags"]} >= {"行业分类","企业规模"}
-        for value in ("流动资金贷款","固定资产贷款"):
-            current=client.post("/api/v1/chat",json={"session_id":session,"action":{"type":"apply_refinement","selections":[{"tag_name":"授信品种","value":value}]}}).json()
-        assert current["follow_up"] is None
-        skipped=client.post("/api/v1/chat",json={"session_id":session,"action":{"type":"skip_refinement"}}).json()
-    assert skipped["follow_up"] is None
+        assert first["recommendations"] == []
+        current=client.post("/api/v1/chat",json={"session_id":session,"message":"筛选制造业小微企业报告"}).json()
+    assert {x["report_id"] for x in current["recommendations"]} == {"r1","r2"}
 
 
-def test_zero_filter_result_can_remove_latest_condition(data_dir,tmp_path):
+def test_removed_refinement_action_is_rejected(data_dir,tmp_path):
     app=_app_with_reports(data_dir,tmp_path)
     with TestClient(app) as client:
         first=client.post("/api/v1/chat",json={"user_id":"u1","message":"筛选制造业报告"}).json()
-        zero=client.post("/api/v1/chat",json={"session_id":first["session_id"],"action":{"type":"apply_refinement","selections":[{"tag_name":"企业规模","value":"大型企业"}]}}).json()
-        restored=client.post("/api/v1/chat",json={"session_id":first["session_id"],"action":{"type":"remove_tag","tag_name":"企业规模"}}).json()
-    assert zero["recommendations"] == []
-    assert zero["follow_up"]["kind"] == "no_results"
-    assert len(restored["recommendations"]) == 3
+        response=client.post("/api/v1/chat",json={"session_id":first["session_id"],"action":{"type":"skip_refinement"}})
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_REQUEST"

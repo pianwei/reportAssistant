@@ -12,3 +12,6 @@ output/
 *.log
 frontend/coverage/
 ops-basic-auth-password.txt
+deploy/xanadu/.ui-release-staging-*/
+deploy/xanadu/*.tar.gz
+前端UI.zip

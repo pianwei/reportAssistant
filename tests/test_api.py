@@ -66,6 +66,8 @@ def test_model_and_rules_agree_can_return_recommendation_in_one_turn(data_dir, t
         assert response.status_code == 200
         assert payload["status"] == "recommendations"
         assert payload["recommendations"][0]["report_id"] == "report-1"
+        assert len(payload["recommendations"][0]["report_tags"]) == 2
+        assert {tag["name"] for tag in payload["recommendations"][0]["report_tags"]} == {"行业分类", "授信金额"}
         assert {tag["name"] for tag in payload["collected_tags"]} == {
             "行业分类", "企业规模", "授信金额", "授信品种"
         }
@@ -109,7 +111,7 @@ def test_unknown_session_uses_error_envelope(data_dir, tmp_path):
         assert response.headers["X-Request-ID"]
 
 
-def test_rule_amount_is_returned_as_confirmation_without_blocking_results(data_dir, tmp_path):
+def test_rule_only_explicit_amount_is_used_without_confirmation(data_dir, tmp_path):
     message = "科学研究和技术服务业小微企业申请300万元流动资金贷款"
     extractor = FakeExtractor([
         {
@@ -129,4 +131,4 @@ def test_rule_amount_is_returned_as_confirmation_without_blocking_results(data_d
         ).json()
     assert first["status"] == "recommendations"
     assert first["recommendations"]
-    assert first["follow_up"]["kind"] == "confirmation"
+    assert "授信金额" in {tag["name"] for tag in first["collected_tags"]}

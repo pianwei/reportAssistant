@@ -229,20 +229,52 @@ class ModelManager:
         except Exception:
             return []
 
-    async def generate_question(self, tag_name: str, examples: list[str], fallback: str) -> str:
+    async def match_reports_from_tags(
+        self, question: str, report_tags: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Use the active model to interpret non-normalized report tags.
+
+        The caller validates every returned ID and builds the final answer, so
+        the model cannot introduce reports that are absent from the snapshot.
+        """
         import json
+
         prompt = (
-            "把下面的尽调信息追问改写成自然、简短、友好的中文，只询问一个信息点。"
-            "仅返回JSON：{\"question\":\"...\"}。"
+            "你是银行尽调报告标签统计分析器。用户会询问哪些报告满足某个语义或数值条件。"
+            "标签值未经规范化，你需要结合标签名称和原始值理解同义表达，例如科技企业可能体现在"
+            "行业、主营业务、企业资质等不同标签中。金额比较必须正确换算元、万和亿，并理解区间。"
+            "只能依据输入JSON，不得使用外部事实，不得编造报告。只返回JSON："
+            '{"matched_report_ids":["输入中存在的report_id"],"criteria_summary":"简短判断口径"}。'
+            "不确定时保守匹配，matched_report_ids不得包含输入中不存在的ID。"
         )
-        try:
-            content = await self._complete([
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": json.dumps({"标签": tag_name, "原问题": fallback, "示例": examples}, ensure_ascii=False)},
-            ], True, 120)
-            return str(json.loads(content).get("question") or fallback)[:160]
-        except Exception:
-            return fallback
+        payload = {"question": question, "reports": report_tags}
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ]
+        for _ in range(2):
+            try:
+                content = await self._complete(messages, True, 1000)
+                try:
+                    data = json.loads(content)
+                except json.JSONDecodeError:
+                    start, end = content.find("{"), content.rfind("}")
+                    if start < 0 or end <= start:
+                        raise
+                    data = json.loads(content[start : end + 1])
+                valid_ids = {item["report_id"] for item in report_tags}
+                result_ids: list[str] = []
+                for report_id in data.get("matched_report_ids", []):
+                    report_id = str(report_id)
+                    if report_id in valid_ids and report_id not in result_ids:
+                        result_ids.append(report_id)
+                return {
+                    "matched_report_ids": result_ids,
+                    "criteria_summary": str(data.get("criteria_summary") or "按全量原始标签进行语义判断")[:300],
+                }
+            except Exception:
+                continue
+        return None
 
     async def answer_competition(self, history: list[dict[str, str]], question: str) -> str:
         prompt = (

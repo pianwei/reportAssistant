@@ -1,0 +1,180 @@
+/* 尽调报告助手：结果卡片与问题衍生气泡的独立参考样式 */
+:root {
+  --dd-primary: #1760b2;
+  --dd-text: #16243a;
+  --dd-muted: #718197;
+  --dd-line: #dce7f3;
+  --dd-card: #ffffff;
+  --dd-soft-blue: #edf5ff;
+}
+
+/* 推荐结果列表 */
+.report-results {
+  display: grid;
+  gap: 12px;
+  margin-left: 12px;
+}
+
+.result-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #22344d;
+}
+
+.result-group-title b { font-size: 16px; }
+.result-group-title span { color: var(--dd-muted); font-size: 12px; }
+
+/* 单个报告卡片 */
+.recommend-card {
+  padding: 16px;
+  background: var(--dd-card);
+  border: 1px solid #e7eef7;
+  border-radius: 16px;
+  box-shadow: 0 6px 18px #173d680d;
+}
+
+.recommend-card.compact {
+  padding: 12px 14px;
+  box-shadow: none;
+}
+
+.recommend-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.report-title { min-width: 0; }
+.recommend-head h3 { margin: 6px 0 0; font-size: 16px; line-height: 1.45; }
+
+.eyebrow {
+  padding: 4px 8px;
+  color: var(--dd-primary);
+  background: var(--dd-soft-blue);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.score {
+  flex: 0 0 auto;
+  color: var(--dd-primary);
+  font-size: 22px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.score small { display: block; color: #8491a2; font-size: 12px; }
+.reason { margin: 10px 0; color: #53647a; font-size: 13px; line-height: 1.6; }
+
+.recommend-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid #edf2f7;
+}
+
+.fold-btn,
+.related-btn {
+  min-height: 36px;
+  padding: 7px 9px;
+  color: var(--dd-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.fold-btn:hover,
+.related-btn { background: var(--dd-soft-blue); }
+
+.report-tag-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #edf2f7;
+}
+
+.report-tag-item {
+  padding: 10px 12px;
+  background: #f7faff;
+  border: 1px solid #e5edf7;
+  border-radius: 12px;
+}
+
+.report-tag-item b { color: #253b57; font-size: 14px; }
+.report-tag-item p { margin: 6px 0 0; color: #465b74; font-size: 13px; line-height: 1.55; }
+
+/* 用户与助手对话气泡 */
+.message { display: flex; }
+.message.user { justify-content: flex-end; }
+
+.bubble {
+  max-width: 84%;
+  padding: 12px 16px;
+  color: var(--dd-text);
+  background: var(--dd-card);
+  border-radius: 17px;
+  box-shadow: 0 5px 18px #163d6810;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.message.user .bubble {
+  color: #fff;
+  background: var(--dd-primary);
+  border-bottom-right-radius: 5px;
+}
+
+.message.assistant .bubble { border-top-left-radius: 5px; }
+
+.intent-label {
+  display: block;
+  width: max-content;
+  margin-bottom: 6px;
+  padding: 2px 7px;
+  color: var(--dd-primary);
+  background: var(--dd-soft-blue);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+/* “问题衍生”追问气泡 */
+.message-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-left: 12px;
+  padding-top: 2px;
+}
+
+.message-suggestions > small {
+  width: 100%;
+  color: var(--dd-muted);
+  font-size: 12px;
+}
+
+.message-suggestions button {
+  padding: 7px 11px;
+  color: #285b96;
+  background: var(--dd-card);
+  border: 1px solid #d4e2f3;
+  border-radius: 16px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.message-suggestions button span {
+  margin-right: 5px;
+  color: var(--dd-primary);
+}
+
+@media (max-width: 380px) {
+  .report-results,
+  .message-suggestions { margin-left: 6px; }
+
+  .recommend-actions { align-items: stretch; }
+}

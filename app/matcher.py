@@ -8,8 +8,12 @@ from app.schemas import MatchDetail, Recommendation
 from app.taxonomy import TAG_WEIGHTS
 
 
-AMOUNT_TAG = "授信金额"
-TEXT_TAGS = {"主营业务", "贷款用途", "还款来源", "担保人", "担保物"}
+AMOUNT_TAGS = {
+    "授信金额", "最新一期财报总资产", "最新一期财报总负债",
+    "最新一期财报净利润", "最新一期经营性净现金流",
+}
+TEXT_TAGS = {"行业分类", "主营业务", "贷款用途", "还款来源", "担保人", "担保物"}
+BOOLEAN_TAGS = {"是否集团客户", "是否科技型企业", "是否我行关联企业"}
 UNAVAILABLE_MARKERS = ("不可提取", "未披露", "未知", "不清楚")
 
 SYNONYMS = {
@@ -20,13 +24,56 @@ SYNONYMS = {
     "流贷": "流动资金贷款",
     "保证": "保证担保",
     "抵押": "抵押担保",
+    "科学研究和技术服务业": "科技服务业",
+    "科学研究与技术服务业": "科技服务业",
+    "科技服务": "科技服务业",
+    "设备购置": "设备采购",
+    "购置设备": "设备采购",
+    "采购原料": "原材料采购",
+    "流动资金周转": "日常经营周转",
+    "补充流动资金": "日常经营周转",
+    "补流": "日常经营周转",
 }
+
+CONCEPT_MARKERS: dict[str, dict[str, tuple[str, ...]]] = {
+    "授信品种": {
+        "流动资金贷款": ("流动资金贷款", "流贷", "经营贷"),
+        "固定资产贷款": ("固定资产贷款", "固贷", "项目贷款"),
+        "银行承兑汇票": ("银行承兑汇票", "银承", "承兑汇票"),
+        "信用证": ("信用证",),
+        "保函": ("保函",),
+        "订单融资": ("订单融资", "订单贷"),
+        "票据贴现": ("票据贴现", "贴现"),
+    },
+    "担保方式": {
+        "信用": ("信用", "免担保", "无担保"),
+        "保证": ("保证", "担保机构担保", "个人担保"),
+        "抵押": ("抵押",),
+        "质押": ("质押",),
+    },
+    "申请性质": {
+        "新增": ("新增", "新授信", "首贷", "首次申请"),
+        "续贷": ("续贷", "续作", "借新还旧"),
+        "调整": ("调整", "变更", "额度调整"),
+    },
+    "所有制性质": {
+        "民营": ("民营", "私营", "自然人控股", "自然人实际控制"),
+        "国有": ("国有", "国企", "国资", "政府实际控制"),
+        "外资": ("外资", "外商投资"),
+        "集体": ("集体所有", "集体企业"),
+    },
+}
+
+_SYNONYM_PATTERN = re.compile(
+    "|".join(re.escape(source) for source in sorted(SYNONYMS, key=len, reverse=True))
+)
 
 
 def normalize(value: str) -> str:
     value = value.lower().strip()
-    for source, target in SYNONYMS.items():
-        value = value.replace(source, target)
+    # Apply synonyms in one pass so a replacement cannot be rewritten again
+    # (for example 科技服务 -> 科技服务业 -> 科技服务业业).
+    value = _SYNONYM_PATTERN.sub(lambda match: SYNONYMS[match.group(0)], value)
     return re.sub(r"[^\w\u4e00-\u9fff]", "", value)
 
 
@@ -59,9 +106,9 @@ def _amounts_in_ten_thousands(value: str) -> tuple[float, float] | None:
     if not matches:
         return None
     numbers = [float(number) * (10000 if unit == "亿" else 1) for number, unit in matches]
-    if "以下" in value or "以内" in value:
+    if any(marker in value for marker in ("以下", "以内", "小于", "低于", "不超过")):
         return 0.0, numbers[0]
-    if "以上" in value:
+    if any(marker in value for marker in ("以上", "大于", "高于", "超过", "不少于")):
         return numbers[0], float("inf")
     if len(numbers) == 1:
         return numbers[0], numbers[0]
@@ -86,15 +133,84 @@ def _amount_similarity(left: str, right: str) -> float:
     return min(1.0, overlap / union) if union > 0 else 1.0
 
 
+def _enterprise_size_classes(value: str) -> set[str]:
+    classes: set[str] = set()
+    if any(marker in value for marker in ("小微", "微型", "小型")):
+        classes.add("small")
+    if "中型" in value:
+        classes.add("medium")
+    if "大型" in value:
+        classes.add("large")
+    return classes
+
+
+def _boolean_value(name: str, value: str) -> bool | None:
+    normalized = normalize(value)
+    if not normalized:
+        return None
+    if normalized.startswith("否") or normalized.startswith("非"):
+        return False
+    if any(marker in normalized for marker in ("不属于", "未纳入", "无关联")):
+        return False
+    if normalized.startswith("是"):
+        return True
+    positive_markers = {
+        "是否科技型企业": ("科技型企业", "高新技术企业", "专精特新", "科技企业"),
+        "是否集团客户": ("集团客户", "集团统一授信", "隶属于集团", "纳入集团"),
+        "是否我行关联企业": ("我行关联企业", "本行关联企业"),
+    }
+    if any(marker in normalized for marker in positive_markers.get(name, ())):
+        return True
+    return None
+
+
+def _concepts(name: str, value: str) -> set[str]:
+    normalized = normalize(value)
+    return {
+        concept
+        for concept, markers in CONCEPT_MARKERS.get(name, {}).items()
+        if any(normalize(marker) in normalized for marker in markers)
+    }
+
+
+def _enum_similarity(name: str, query: str, report: str) -> float:
+    if name == "企业规模":
+        query_classes = _enterprise_size_classes(query)
+        report_classes = _enterprise_size_classes(report)
+        if not query_classes or not report_classes or not (query_classes & report_classes):
+            return 0.0
+        # A report containing conflicting size labels remains usable but gets
+        # a lower score than one with a single, unambiguous classification.
+        return 1.0 if len(report_classes) == 1 else 0.7
+    if name in BOOLEAN_TAGS:
+        query_value = _boolean_value(name, query)
+        report_value = _boolean_value(name, report)
+        if query_value is not None and report_value is not None:
+            return 1.0 if query_value == report_value else 0.0
+    query_concepts = _concepts(name, query)
+    report_concepts = _concepts(name, report)
+    if query_concepts:
+        if not report_concepts:
+            return 0.0
+        overlap = query_concepts & report_concepts
+        return len(overlap) / len(query_concepts) if overlap else 0.0
+    a, b = normalize(query), normalize(report)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    # Exact containment tolerates explanatory suffixes while still preventing
+    # fuzzy mistakes such as 大型企业 matching 中型企业.
+    return 0.9 if a in b or b in a else 0.0
+
+
 def tag_similarity(name: str, query: str, report: str) -> float:
     if any(marker in report for marker in UNAVAILABLE_MARKERS):
         return 0.0
-    if name == AMOUNT_TAG:
+    if name in AMOUNT_TAGS:
         return _amount_similarity(query, report)
     if name not in TEXT_TAGS:
-        # 分类、布尔和枚举标签只接受归一化后的精确值；避免“大型企业”
-        # 因字面相似而误命中“中型企业”。固定同义词在 normalize 中处理。
-        return 1.0 if normalize(query) == normalize(report) else 0.0
+        return _enum_similarity(name, query, report)
     return _text_similarity(query, report)
 
 
@@ -120,6 +236,7 @@ def rank_reports(
                 report_type=report["report_type"], score=score,
                 recommendation_reason="未限定条件，按报告标签与综述数据完整度推荐。",
                 matched_tags=[], unmatched_tags=[], missing_tags=[], summary=report["summary"],
+                report_tags=report.get("tags", []),
             ))
         results.sort(key=lambda item: (-item.score, item.report_name, item.report_id))
         return results if limit is None else results[:limit]
@@ -161,6 +278,7 @@ def rank_reports(
                 matched_tags=matched,
                 unmatched_tags=unmatched,
                 missing_tags=missing,
+                report_tags=report.get("tags", []),
                 summary=report["summary"],
             )
         )

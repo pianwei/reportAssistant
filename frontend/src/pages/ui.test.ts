@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MobileApp from './MobileApp.vue'
 import OpsApp from './OpsApp.vue'
 import RecommendationCard from '../components/RecommendationCard.vue'
-import FollowUpCard from '../components/FollowUpCard.vue'
 import ReportResultsGroup from '../components/ReportResultsGroup.vue'
 
 const response = (body: unknown, status = 200) => Promise.resolve({
@@ -37,12 +36,17 @@ describe('移动助手', () => {
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = mount(MobileApp)
     await flushPromises()
-    expect(wrapper.text()).toContain('您好，我是尽调助手')
+    expect(wrapper.text()).toContain('您好，我是立功竞赛助手')
+    expect(wrapper.find('[aria-label="历史记录"]').exists()).toBe(false)
+    expect(wrapper.get('.mobile-header button').attributes('aria-label')).toBe('新建会话')
+    expect(wrapper.find('.section-title button').exists()).toBe(false)
+    expect(wrapper.findAll('.discovery-side .feature-strip button')).toHaveLength(0)
     await wrapper.get('.guess-card > button').trigger('click')
     await flushPromises()
     const chatCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/chat'))
     expect(JSON.parse(String(chatCall?.[1]?.body))).toMatchObject({ user_id: 'demo_12345678' })
     expect(wrapper.text()).toContain('请问客户所属行业？')
+    expect(wrapper.text()).toContain('问题衍生')
   })
 })
 
@@ -51,6 +55,7 @@ describe('推荐卡片', () => {
     const wrapper = mount(RecommendationCard, { props: { item: {
       report_id: 'r1', report_name: '科技企业报告', report_type: '授信尽调', score: 92,
       recommendation_reason: '行业与授信品种匹配', matched_tags: [], unmatched_tags: [],
+      report_tags: [{ name: '行业分类', value: '科学研究和技术服务业' }, { name: '备注标签', value: '' }],
       summary: { 客户概况: '经营稳定', 主要风险: ['回款周期较长'] },
     } } })
     expect(wrapper.text()).toContain('92')
@@ -59,6 +64,11 @@ describe('推荐卡片', () => {
     expect(wrapper.text()).toContain('经营稳定')
     expect(wrapper.text()).toContain('回款周期较长')
     expect(wrapper.findAll('.fold-btn')[0].attributes('aria-expanded')).toBe('true')
+    expect(wrapper.text()).toContain('查看标签（2）')
+    await wrapper.findAll('.fold-btn')[1].trigger('click')
+    expect(wrapper.text()).toContain('科学研究和技术服务业')
+    expect(wrapper.text()).toContain('备注标签')
+    expect(wrapper.text()).toContain('—')
   })
 
   it('点击关联案例时向父组件发送当前报告', async () => {
@@ -69,7 +79,7 @@ describe('推荐卡片', () => {
   })
 })
 
-describe('结果组和可选追问', () => {
+describe('结果组', () => {
   const report=(id:string)=>({report_id:id,report_name:`报告${id}`,report_type:'尽调',score:80,recommendation_reason:'匹配',matched_tags:[],unmatched_tags:[],summary:{}})
   it('前三份直接展示并折叠其余报告', async () => {
     const wrapper=mount(ReportResultsGroup,{props:{items:[1,2,3,4,5].map(x=>report(String(x)))}})
@@ -78,20 +88,6 @@ describe('结果组和可选追问', () => {
     await wrapper.get('.rest-toggle').trigger('click')
     expect(wrapper.findAll('.recommend-card')).toHaveLength(5)
     expect(wrapper.get('.rest-toggle').attributes('aria-expanded')).toBe('true')
-  })
-
-  it('每个标签单选并可一次应用多个不同条件', async () => {
-    const wrapper=mount(FollowUpCard,{props:{followUp:{title:'继续细化',prompt:'可选',remaining_rounds:2,allow_more:true,allow_custom:true,allow_skip:true,groups:[
-      {tag_name:'行业分类',label:'行业',options:[{label:'制造业',value:'制造业',count:2},{label:'服务业',value:'服务业',count:1}]},
-      {tag_name:'企业规模',label:'规模',options:[{label:'小微',value:'小微',count:2}]},
-    ]}}})
-    await wrapper.findAll('.option-grid button')[0].trigger('click')
-    await wrapper.get('.secondary-action').trigger('click')
-    await wrapper.findAll('.option-grid button')[2].trigger('click')
-    await wrapper.get('.apply-action').trigger('click')
-    expect(wrapper.emitted('apply')?.[0]?.[0]).toEqual([
-      {tag_name:'行业分类',value:'制造业'},{tag_name:'企业规模',value:'小微'},
-    ])
   })
 })
 

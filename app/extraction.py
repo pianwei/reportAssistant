@@ -42,6 +42,12 @@ AMOUNT_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:万|亿)\s*(?:元)?(?:\s*[-至到~�
 TERM_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:年|个月|月|天)")
 AMOUNT_CONTEXT = ("申请", "授信", "贷款", "额度", "融资")
 TERM_CONTEXT = ("期限", "授信", "贷款")
+REQUIRED_ANCHORS: dict[str, tuple[str, ...]] = {
+    "最新一期财报总资产": ("总资产",),
+    "最新一期财报总负债": ("总负债",),
+    "最新一期财报净利润": ("净利润",),
+    "最新一期经营性净现金流": ("经营性净现金流", "经营现金流"),
+}
 
 
 def _context(message: str, start: int, end: int, radius: int = 12) -> str:
@@ -62,8 +68,33 @@ def rule_extract(message: str, expected_tag: str | None = None) -> list[Extracte
                 confidence=1.0,
             )
 
+    for name, anchors in REQUIRED_ANCHORS.items():
+        if expected_tag and expected_tag != name:
+            continue
+        for anchor in anchors:
+            anchor_index = message.find(anchor)
+            if anchor_index < 0:
+                continue
+            search_start = anchor_index + len(anchor)
+            amount = AMOUNT_RE.search(message, search_start, min(len(message), search_start + 28))
+            if amount:
+                prefix = message[search_start:amount.start()]
+                value = amount.group(0)
+                if name == "最新一期财报净利润" and "亏损" in prefix:
+                    value = "亏损" + value
+                found[name] = ExtractedTag(
+                    name=name,
+                    value=value,
+                    evidence=_context(message, anchor_index, amount.end(), radius=4),
+                    confidence=1.0,
+                )
+                break
+
     if not expected_tag or expected_tag == "授信金额":
         for match in AMOUNT_RE.finditer(message):
+            before = message[max(0, match.start() - 14):match.start()]
+            if any(anchor in before for anchors in REQUIRED_ANCHORS.values() for anchor in anchors):
+                continue
             evidence = _context(message, match.start(), match.end())
             if expected_tag == "授信金额" or any(word in evidence for word in AMOUNT_CONTEXT):
                 found["授信金额"] = ExtractedTag(
@@ -80,14 +111,6 @@ def rule_extract(message: str, expected_tag: str | None = None) -> list[Extracte
                 )
                 break
     return list(found.values())
-
-
-REQUIRED_ANCHORS: dict[str, tuple[str, ...]] = {
-    "最新一期财报总资产": ("总资产",),
-    "最新一期财报总负债": ("总负债",),
-    "最新一期财报净利润": ("净利润",),
-    "最新一期经营性净现金流": ("经营性净现金流", "经营现金流"),
-}
 
 
 def validated_model_tags(

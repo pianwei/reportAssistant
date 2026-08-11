@@ -6,8 +6,8 @@
 - 链路：公网入口 → WireGuard `wg-aliyun` → Xanadu 系统 Nginx → Dify Nginx → 应用容器。
 - 应用目录：`/home/pianwei/apps/due-diligence-assistant`
 - 当前容器：`due-diligence-assistant`
-- 当前镜像：`due-diligence-assistant:20260811-results-first-final`
-- 回滚容器：`due-diligence-assistant-pre-results-first-final-20260811`（已停止，保留上一版本镜像）。
+- 当前镜像：`due-diligence-assistant:20260811-ui-competition-v1`
+- 回滚容器：`due-diligence-assistant-pre-ui-competition-v1-20260811`（已停止，镜像为 `due-diligence-assistant:20260811-intent-v5`）。
 - 重启策略：`unless-stopped`
 - 宿主机监听：`127.0.0.1:8010`，不绕过 Nginx 直接开放端口。
 - SQLite：`/home/pianwei/apps/due-diligence-assistant/runtime/app.db`
@@ -68,3 +68,10 @@ npm run build
 ```
 
 报告数据来自镜像内的 `data/**/*.json`。修改报告后需要重新构建镜像并重建容器；会话、消息、运营模型配置和 SQLite 数据保存在宿主机 `runtime` 目录，不随镜像更新丢失。
+
+## 2026-08-11 前端 UI 发布
+
+- 发布脚本：`deploy/xanadu/switch_ui_competition_release.sh`
+- 覆盖镜像定义：`deploy/xanadu/ui-overlay.Dockerfile`
+- 发布内容：仅替换当前稳定镜像中的 `/app/frontend/dist`，不包含工作区其他后端改动。
+- 公网验证：主页、静态资源、健康接口均为 `200`；运营页匿名访问为 `401`，认证后的运营页和运营 API 均为 `200`。

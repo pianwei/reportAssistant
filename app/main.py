@@ -71,7 +71,6 @@ def create_app(settings: Settings | None = None, extractor: Extractor | None = N
     app.state.feature_service = FeatureService(database, model_manager)
     app.state.chat_service = ChatService(
         database, extractor or model_manager, model_manager, app.state.feature_service,
-        use_model_copy=extractor is None,
     )
 
     app.add_middleware(

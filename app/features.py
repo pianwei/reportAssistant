@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import re
 from collections import Counter
 from typing import Any
 
@@ -117,10 +118,166 @@ class FeatureService:
             "batch_id": batch_id,
         }
 
-    def statistics_for_question(self, question: str) -> tuple[str, dict[str, Any]]:
+    @staticmethod
+    def _tag_snapshot(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Build the complete, model-facing tag JSON from the startup dataset."""
+        return [
+            {
+                "report_id": report["report_id"],
+                "report_name": report["report_name"],
+                "report_type": report["report_type"],
+                "tags": [
+                    {
+                        "dimension": tag.get("dimension", ""),
+                        "name": tag.get("name", ""),
+                        "value": tag.get("value", ""),
+                        "completeness": tag.get("completeness", ""),
+                        "note": tag.get("note", ""),
+                    }
+                    for tag in report.get("tags", [])
+                ],
+            }
+            for report in reports
+        ]
+
+    @staticmethod
+    def _amount_condition(question: str) -> tuple[str, float] | None:
+        match = re.search(
+            r"(大于|超过|高于|不少于|至少|小于|低于|少于|不超过|至多)\s*"
+            r"(\d+(?:\.\d+)?)\s*(亿|万|元)?",
+            question.replace(",", ""),
+        )
+        if not match:
+            return None
+        operator, number, unit = match.groups()
+        value = float(number)
+        if unit == "亿":
+            value *= 10000
+        elif unit == "元":
+            value /= 10000
+        normalized = {
+            "大于": "gt", "超过": "gt", "高于": "gt",
+            "不少于": "gte", "至少": "gte",
+            "小于": "lt", "低于": "lt", "少于": "lt",
+            "不超过": "lte", "至多": "lte",
+        }[operator]
+        return normalized, value
+
+    @staticmethod
+    def _amount_values(value: str) -> list[float]:
+        result: list[float] = []
+        for number, unit in re.findall(r"(\d+(?:\.\d+)?)\s*(亿|万|元)?", value.replace(",", "")):
+            amount = float(number)
+            if unit == "亿":
+                amount *= 10000
+            elif unit == "元":
+                amount /= 10000
+            result.append(amount)
+        return result
+
+    @classmethod
+    def _matches_amount(cls, report: dict[str, Any], condition: tuple[str, float]) -> bool:
+        operator, threshold = condition
+        values = [
+            amount
+            for tag in report.get("tags", [])
+            if tag.get("name") == "授信金额"
+            for amount in cls._amount_values(tag.get("value", ""))
+        ]
+        compare = {
+            "gt": lambda value: value > threshold,
+            "gte": lambda value: value >= threshold,
+            "lt": lambda value: value < threshold,
+            "lte": lambda value: value <= threshold,
+        }[operator]
+        return any(compare(value) for value in values)
+
+    @staticmethod
+    def _fallback_semantic_ids(question: str, reports: list[dict[str, Any]]) -> list[str]:
+        if "科技" in question:
+            terms = ("科技", "技术", "软件", "半导体", "生物医药", "研发")
+        else:
+            cleaned = re.sub(r"哪些|有哪些|多少|几篇|几份|几个|有几|报告|统计|查询|相关|企业|的", " ", question)
+            terms = tuple(word for word in re.split(r"[\s，。！？、]+", cleaned) if len(word) >= 2)
+        result = []
+        for report in reports:
+            haystack = " ".join(tag.get("value", "") for tag in report.get("tags", []))
+            if terms and any(term in haystack for term in terms):
+                result.append(report["report_id"])
+        return result
+
+    async def _semantic_report_statistics(
+        self, question: str, reports: list[dict[str, Any]]
+    ) -> tuple[str, dict[str, Any]]:
+        snapshot = self._tag_snapshot(reports)
+        analysis = await self.model_manager.match_reports_from_tags(question, snapshot)
+        amount_condition = self._amount_condition(question)
+        if amount_condition:
+            # The model interprets the raw context, while the backend enforces
+            # recognizable amount comparisons to keep numeric results exact.
+            matched_ids = {
+                report["report_id"] for report in reports
+                if self._matches_amount(report, amount_condition)
+            }
+        else:
+            matched_ids = set(
+                (analysis or {}).get("matched_report_ids")
+                or self._fallback_semantic_ids(question, reports)
+            )
+        matched = sorted(
+            (report for report in reports if report["report_id"] in matched_ids),
+            key=lambda report: (report["report_name"], report["report_id"]),
+        )
+        items = [
+            {
+                "report_id": report["report_id"],
+                "report_name": report["report_name"],
+                "report_type": report["report_type"],
+            }
+            for report in matched
+        ]
+        ratio_question = any(word in question for word in ("占比", "比例"))
+        count_question = bool(re.search(
+            r"(?:多少|几)(?:篇|份|个|家|条)|数量|总数", question
+        ))
+        if ratio_question:
+            ratio = round(len(items) / len(reports) * 100, 2) if reports else 0.0
+            answer = f"符合条件的报告共 {len(items)} 份，占全部 {len(reports)} 份报告的 {ratio:g}%。"
+        elif items and count_question:
+            answer = f"共找到 {len(items)} 份符合条件的报告。"
+        elif items:
+            listing = "\n".join(
+                f"{index}. {item['report_name']}（{item['report_type']}）"
+                for index, item in enumerate(items, 1)
+            )
+            answer = f"共找到 {len(items)} 份符合条件的报告：\n{listing}"
+        else:
+            answer = "暂未找到符合条件的报告。"
+        return answer, {
+            "metric": "semantic_report_query", "title": "报告条件统计",
+            "value": len(items),
+            "breakdown": ([{"label": "符合条件", "count": len(items)},
+                           {"label": "全部报告", "count": len(reports)}]
+                          if ratio_question else []),
+            "reports": items,
+        }
+
+    async def statistics_for_question(self, question: str) -> tuple[str, dict[str, Any]]:
         reports = self.database.all_reports_with_tags()
         all_tags = [tag for report in reports for tag in report["tags"]]
-        if any(word in question for word in ("多少篇", "多少份", "报告数", "报告总数")):
+        report_count_question = bool(re.search(
+            r"(?:多少|几)(?:篇|份|个).*报告|报告.*(?:多少|几)(?:篇|份|个)|报告(?:数|总数)",
+            question,
+        ))
+        count_qualifier = re.sub(
+            r"请问|当前|现在|目前|系统|数据库|我们|我行|一共|总共|共有|有|"
+            r"尽调|报告|多少|几篇|几份|几个|篇|份|个|数|总数|中|里|的|[\s，。！？?]",
+            "",
+            question,
+        )
+        if report_count_question and count_qualifier:
+            return await self._semantic_report_statistics(question, reports)
+        if report_count_question:
             value = len(reports)
             return f"当前数据库共有 {value} 篇尽调报告。", {
                 "metric": "report_count", "title": "报告总数", "value": value, "breakdown": [],
@@ -130,6 +287,11 @@ class FeatureService:
             return f"当前数据库共有 {value} 条报告标签。", {
                 "metric": "tag_count", "title": "标签总数", "value": value, "breakdown": [],
             }
+        if "报告" in question and any(word in question for word in (
+            "哪些", "有哪些", "大于", "超过", "高于", "不少于", "至少",
+            "小于", "低于", "少于", "不超过", "至多", "符合", "相关",
+        )):
+            return await self._semantic_report_statistics(question, reports)
         if "行业" in question:
             values = [
                 tag["value"].split("（", 1)[0] for tag in all_tags

@@ -331,35 +331,6 @@ class Database:
                 (intent, summary, int(switched), int(switched), int(switched), int(switched), int(switched), session_id),
             )
 
-    def refinement_count(self, session_id: str) -> int:
-        session = self.get_session(session_id)
-        return int(session.get("refinement_count") or 0) if session else 0
-
-    def increment_refinement(self, session_id: str) -> int:
-        with self.connect() as conn:
-            conn.execute(
-                "UPDATE sessions SET refinement_count=refinement_count+1,updated_at=CURRENT_TIMESTAMP WHERE session_id=?",
-                (session_id,),
-            )
-            row = conn.execute(
-                "SELECT refinement_count FROM sessions WHERE session_id=?", (session_id,)
-            ).fetchone()
-        return int(row["refinement_count"]) if row else 0
-
-    def set_expected_tag(self, session_id: str, tag_name: str | None) -> None:
-        with self.connect() as conn:
-            conn.execute(
-                "UPDATE sessions SET expected_tag=?,pending_tag_value=NULL WHERE session_id=?",
-                (tag_name, session_id),
-            )
-
-    def remove_session_tag(self, session_id: str, tag_name: str) -> bool:
-        with self.connect() as conn:
-            cursor = conn.execute(
-                "DELETE FROM session_tags WHERE session_id=? AND name=?", (session_id, tag_name)
-            )
-        return cursor.rowcount > 0
-
     def skipped_tags(self, session_id: str) -> set[str]:
         session = self.get_session(session_id)
         if not session:

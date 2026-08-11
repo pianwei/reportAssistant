@@ -77,29 +77,12 @@ class ModelExtraction(BaseModel):
     statistic_query: str | None = None
 
 
-class RefinementSelection(BaseModel):
-    tag_name: str = Field(min_length=1, max_length=64)
-    value: str = Field(min_length=1, max_length=500)
-
-
 class ChatAction(BaseModel):
-    type: Literal["related_reports", "apply_refinement", "skip_refinement", "remove_tag"]
-    report_id: str | None = Field(default=None, min_length=1, max_length=128)
-    selections: list[RefinementSelection] = Field(default_factory=list, max_length=4)
-    tag_name: str | None = Field(default=None, min_length=1, max_length=64)
+    type: Literal["related_reports"]
+    report_id: str = Field(min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def validate_action_payload(self) -> "ChatAction":
-        if self.type == "related_reports" and not self.report_id:
-            raise ValueError("related_reports 必须提供 report_id")
-        if self.type == "apply_refinement":
-            if not self.selections:
-                raise ValueError("apply_refinement 必须提供 selections")
-            names = [item.tag_name for item in self.selections]
-            if len(names) != len(set(names)):
-                raise ValueError("同一标签只能选择一个值")
-        if self.type == "remove_tag" and not self.tag_name:
-            raise ValueError("remove_tag 必须提供 tag_name")
         return self
 
 
@@ -141,33 +124,15 @@ class ClarificationQuestion(BaseModel):
     allow_finish: bool = True
 
 
-class FollowUpOption(BaseModel):
-    label: str
-    value: str
-    count: int = Field(default=0, ge=0)
-
-
-class FollowUpGroup(BaseModel):
-    tag_name: str
-    label: str
-    options: list[FollowUpOption] = Field(default_factory=list, min_length=1, max_length=4)
-
-
-class FollowUpCard(BaseModel):
-    kind: Literal["preference", "filter_more", "confirmation", "no_results"]
-    title: str
-    prompt: str
-    groups: list[FollowUpGroup] = Field(default_factory=list, max_length=4)
-    allow_more: bool = False
-    allow_custom: bool = True
-    allow_skip: bool = True
-    removable_tag: str | None = None
-    remaining_rounds: int = Field(default=0, ge=0, le=3)
-
-
 class StatisticBreakdown(BaseModel):
     label: str
     count: int
+
+
+class StatisticReport(BaseModel):
+    report_id: str
+    report_name: str
+    report_type: str
 
 
 class StatisticResult(BaseModel):
@@ -175,6 +140,7 @@ class StatisticResult(BaseModel):
     title: str
     value: int | float | str
     breakdown: list[StatisticBreakdown] = Field(default_factory=list)
+    reports: list[StatisticReport] = Field(default_factory=list)
 
 
 class AnswerResult(BaseModel):
@@ -191,6 +157,17 @@ class MatchDetail(BaseModel):
     similarity: float = Field(ge=0, le=1)
 
 
+class ReportTagInfo(BaseModel):
+    name: str
+    value: str
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def empty_value_as_dash(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        return normalized or "—"
+
+
 class Recommendation(BaseModel):
     report_id: str
     report_name: str
@@ -200,22 +177,22 @@ class Recommendation(BaseModel):
     matched_tags: list[MatchDetail]
     unmatched_tags: list[MatchDetail]
     missing_tags: list[str]
+    report_tags: list[ReportTagInfo] = Field(default_factory=list)
     summary: dict[str, Any]
 
 
 class ChatResponse(BaseModel):
     request_id: str
     session_id: str
-    intent: Literal["recommendation", "filter", "statistics", "qa", "unsupported"]
+    intent: Literal["recommendation", "filter", "statistics", "qa", "greeting", "unsupported"]
     status: Literal[
         "needs_clarification", "recommendations", "filter_results",
-        "statistics", "answer", "unsupported", "error",
+        "statistics", "answer", "greeting", "unsupported", "error",
     ]
     assistant_message: str
     collected_tags: list[CollectedTag]
     information_incomplete: bool = False
     question: ClarificationQuestion | None = None
-    follow_up: FollowUpCard | None = None
     recommendations: list[Recommendation] | None = None
     statistic: StatisticResult | None = None
     answer: AnswerResult | None = None

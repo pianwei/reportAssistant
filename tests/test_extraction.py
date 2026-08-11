@@ -16,9 +16,17 @@ def test_rules_extract_high_confidence_structured_tags():
 
 
 def test_amount_requires_credit_context_unless_expected():
-    assert rule_extract("公司总资产300万元") == []
+    financial = rule_extract("公司总资产300万元")
+    assert financial[0].name == "最新一期财报总资产"
     expected = rule_extract("300万元", expected_tag="授信金额")
     assert expected[0].name == "授信金额"
+
+
+def test_rule_distinguishes_financial_amount_from_credit_amount():
+    tags = rule_extract("公司最新一期财报总资产300万元。本次计划申请100万元流动资金贷款")
+    by_name = {tag.name: tag for tag in tags}
+    assert by_name["最新一期财报总资产"].value == "300万元"
+    assert by_name["授信金额"].value == "100万元"
 
 
 def test_model_evidence_and_semantic_anchors_are_enforced():
