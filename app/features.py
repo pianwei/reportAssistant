@@ -139,7 +139,8 @@ class FeatureService:
             breakdown = [{"label": label, "count": count} for label, count in counts.most_common(10)]
             if breakdown:
                 top = breakdown[0]
-                answer = f"当前报告数量最多的行业是{top['label']}，共有 {top['count']} 篇。"
+                distribution = "、".join(f"{item['label']} {item['count']}篇" for item in breakdown)
+                answer = f"当前报告数量最多的行业是{top['label']}，共有 {top['count']} 篇。行业分布为：{distribution}。"
                 value: int | str = top["label"]
             else:
                 answer, value = "当前报告中没有可统计的行业标签。", "暂无数据"
@@ -147,7 +148,8 @@ class FeatureService:
         if "类型" in question:
             counts = Counter(report["report_type"] for report in reports)
             breakdown = [{"label": label, "count": count} for label, count in counts.most_common(10)]
-            return "已根据数据库计算报告类型分布。", {
+            distribution = "、".join(f"{item['label']} {item['count']}篇" for item in breakdown) or "暂无数据"
+            return f"报告类型共 {len(counts)} 类，分布为：{distribution}。", {
                 "metric": "report_type_distribution", "title": "报告类型分布",
                 "value": len(counts), "breakdown": breakdown,
             }
@@ -155,7 +157,8 @@ class FeatureService:
         if tag_name:
             counts = Counter(tag["value"] for tag in all_tags if tag["name"] == tag_name)
             breakdown = [{"label": label, "count": count} for label, count in counts.most_common(10)]
-            return f"已根据全量标签计算“{tag_name}”分布。", {
+            distribution = "、".join(f"{item['label']} {item['count']}条" for item in breakdown) or "暂无数据"
+            return f"“{tag_name}”共有 {len(counts)} 个不同取值，分布为：{distribution}。", {
                 "metric": "tag_distribution", "title": f"{tag_name}分布",
                 "value": len(counts), "breakdown": breakdown,
             }

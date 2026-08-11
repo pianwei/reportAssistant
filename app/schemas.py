@@ -77,9 +77,30 @@ class ModelExtraction(BaseModel):
     statistic_query: str | None = None
 
 
+class RefinementSelection(BaseModel):
+    tag_name: str = Field(min_length=1, max_length=64)
+    value: str = Field(min_length=1, max_length=500)
+
+
 class ChatAction(BaseModel):
-    type: Literal["related_reports"]
-    report_id: str = Field(min_length=1, max_length=128)
+    type: Literal["related_reports", "apply_refinement", "skip_refinement", "remove_tag"]
+    report_id: str | None = Field(default=None, min_length=1, max_length=128)
+    selections: list[RefinementSelection] = Field(default_factory=list, max_length=4)
+    tag_name: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_action_payload(self) -> "ChatAction":
+        if self.type == "related_reports" and not self.report_id:
+            raise ValueError("related_reports 必须提供 report_id")
+        if self.type == "apply_refinement":
+            if not self.selections:
+                raise ValueError("apply_refinement 必须提供 selections")
+            names = [item.tag_name for item in self.selections]
+            if len(names) != len(set(names)):
+                raise ValueError("同一标签只能选择一个值")
+        if self.type == "remove_tag" and not self.tag_name:
+            raise ValueError("remove_tag 必须提供 tag_name")
+        return self
 
 
 class ChatRequest(BaseModel):
@@ -118,6 +139,30 @@ class ClarificationQuestion(BaseModel):
     examples: list[str]
     skippable: bool = True
     allow_finish: bool = True
+
+
+class FollowUpOption(BaseModel):
+    label: str
+    value: str
+    count: int = Field(default=0, ge=0)
+
+
+class FollowUpGroup(BaseModel):
+    tag_name: str
+    label: str
+    options: list[FollowUpOption] = Field(default_factory=list, min_length=1, max_length=4)
+
+
+class FollowUpCard(BaseModel):
+    kind: Literal["preference", "filter_more", "confirmation", "no_results"]
+    title: str
+    prompt: str
+    groups: list[FollowUpGroup] = Field(default_factory=list, max_length=4)
+    allow_more: bool = False
+    allow_custom: bool = True
+    allow_skip: bool = True
+    removable_tag: str | None = None
+    remaining_rounds: int = Field(default=0, ge=0, le=3)
 
 
 class StatisticBreakdown(BaseModel):
@@ -170,6 +215,7 @@ class ChatResponse(BaseModel):
     collected_tags: list[CollectedTag]
     information_incomplete: bool = False
     question: ClarificationQuestion | None = None
+    follow_up: FollowUpCard | None = None
     recommendations: list[Recommendation] | None = None
     statistic: StatisticResult | None = None
     answer: AnswerResult | None = None

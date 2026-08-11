@@ -104,21 +104,12 @@ def test_validation_and_not_found_use_error_envelope(data_dir, tmp_path):
     assert missing.json()["error"]["code"] == "NOT_FOUND"
 
 
-def test_five_unsuccessful_clarifications_return_incomplete_recommendation(data_dir, tmp_path):
+def test_recommendation_without_details_returns_immediate_result(data_dir, tmp_path):
     outputs = [{"intent": "report_recommendation", "tags": []}]
-    outputs.extend({"intent": "provide_information", "tags": []} for _ in range(5))
     app = create_app(_settings(data_dir, tmp_path / "rounds.db"), SequenceExtractor(outputs))
     with TestClient(app) as client:
         response = client.post("/api/v1/chat", json={"user_id": "user-1", "message": "请推荐报告"})
-        session_id = response.json()["session_id"]
-        assert response.json()["status"] == "needs_clarification"
-        for _ in range(4):
-            response = client.post(
-                "/api/v1/chat", json={"session_id": session_id, "message": "不知道"}
-            )
-            assert response.json()["status"] == "needs_clarification"
-        response = client.post(
-            "/api/v1/chat", json={"session_id": session_id, "message": "还是不知道"}
-        )
-    assert response.json()["status"] == "recommendations"
-    assert response.json()["information_incomplete"] is True
+        payload = response.json()
+    assert payload["status"] == "recommendations"
+    assert payload["recommendations"]
+    assert payload["information_incomplete"] is True

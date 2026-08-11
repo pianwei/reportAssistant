@@ -75,19 +75,19 @@ def test_keyword_router_falls_back_when_model_is_unavailable(data_dir, tmp_path)
     assert response.json()["statistic"]["value"] == 1
 
 
-def test_skip_moves_to_next_optional_question(data_dir, tmp_path):
+def test_skip_refinement_keeps_result_and_ends_optional_question(data_dir, tmp_path):
     app = create_app(settings_for(data_dir, tmp_path), IntentExtractor())
     with TestClient(app) as client:
         first = client.post("/api/v1/chat", json={
             "user_id": "alice", "message": "推荐几个报告"
         }).json()
         second = client.post("/api/v1/chat", json={
-            "session_id": first["session_id"], "message": "跳过"
+            "session_id": first["session_id"], "action": {"type": "skip_refinement"}
         }).json()
-    assert first["question"]["tag_name"] == "行业分类"
-    assert second["question"]["tag_name"] == "主营业务"
-    assert second["question"]["skippable"] is True
-    assert second["question"]["allow_finish"] is True
+    assert first["status"] == "recommendations"
+    assert second["status"] == "recommendations"
+    assert second["follow_up"] is None
+    assert "保留当前结果" in second["assistant_message"]
 
 
 def test_unsupported_question_is_politely_rejected(data_dir, tmp_path):

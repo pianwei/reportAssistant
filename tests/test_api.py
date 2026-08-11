@@ -71,7 +71,7 @@ def test_model_and_rules_agree_can_return_recommendation_in_one_turn(data_dir, t
         }
 
 
-def test_expected_tag_rejects_other_label(data_dir, tmp_path):
+def test_result_first_does_not_force_an_expected_tag(data_dir, tmp_path):
     extractor = FakeExtractor(
         [
             {"intent": "report_recommendation", "tags": []},
@@ -93,10 +93,9 @@ def test_expected_tag_rejects_other_label(data_dir, tmp_path):
             "/api/v1/chat",
             json={"session_id": first["session_id"], "message": "300万元"},
         ).json()
-        assert extractor.expected_tags == [None, "行业分类"]
-        assert second["status"] == "needs_clarification"
-        assert second["collected_tags"] == []
-        assert second["question"]["tag_name"] == "行业分类"
+        assert extractor.expected_tags == [None, None]
+        assert first["status"] == "recommendations"
+        assert second["status"] == "recommendations"
 
 
 def test_unknown_session_uses_error_envelope(data_dir, tmp_path):
@@ -110,7 +109,7 @@ def test_unknown_session_uses_error_envelope(data_dir, tmp_path):
         assert response.headers["X-Request-ID"]
 
 
-def test_affirmative_reply_persists_pending_rule_value(data_dir, tmp_path):
+def test_rule_amount_is_returned_as_confirmation_without_blocking_results(data_dir, tmp_path):
     message = "科学研究和技术服务业小微企业申请300万元流动资金贷款"
     extractor = FakeExtractor([
         {
@@ -128,13 +127,6 @@ def test_affirmative_reply_persists_pending_rule_value(data_dir, tmp_path):
         first = client.post(
             "/api/v1/chat", json={"user_id": "user-1", "message": message}
         ).json()
-        assert first["question"]["tag_name"] == "授信金额"
-        second = client.post(
-            "/api/v1/chat",
-            json={"session_id": first["session_id"], "message": "准确"},
-        ).json()
-    assert second["status"] == "recommendations"
-    assert any(
-        tag["name"] == "授信金额" and tag["value"] == "300万元"
-        for tag in second["collected_tags"]
-    )
+    assert first["status"] == "recommendations"
+    assert first["recommendations"]
+    assert first["follow_up"]["kind"] == "confirmation"

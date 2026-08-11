@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MobileApp from './MobileApp.vue'
 import OpsApp from './OpsApp.vue'
 import RecommendationCard from '../components/RecommendationCard.vue'
+import FollowUpCard from '../components/FollowUpCard.vue'
+import ReportResultsGroup from '../components/ReportResultsGroup.vue'
 
 const response = (body: unknown, status = 200) => Promise.resolve({
   ok: status >= 200 && status < 300,
@@ -53,9 +55,10 @@ describe('推荐卡片', () => {
     } } })
     expect(wrapper.text()).toContain('92')
     expect(wrapper.text()).not.toContain('经营稳定')
-    await wrapper.get('.text-btn').trigger('click')
+    await wrapper.findAll('.fold-btn')[0].trigger('click')
     expect(wrapper.text()).toContain('经营稳定')
     expect(wrapper.text()).toContain('回款周期较长')
+    expect(wrapper.findAll('.fold-btn')[0].attributes('aria-expanded')).toBe('true')
   })
 
   it('点击关联案例时向父组件发送当前报告', async () => {
@@ -63,6 +66,32 @@ describe('推荐卡片', () => {
     const wrapper = mount(RecommendationCard, { props: { item, allowRelated: true } })
     await wrapper.get('.related-btn').trigger('click')
     expect(wrapper.emitted('related')?.[0]).toEqual([item])
+  })
+})
+
+describe('结果组和可选追问', () => {
+  const report=(id:string)=>({report_id:id,report_name:`报告${id}`,report_type:'尽调',score:80,recommendation_reason:'匹配',matched_tags:[],unmatched_tags:[],summary:{}})
+  it('前三份直接展示并折叠其余报告', async () => {
+    const wrapper=mount(ReportResultsGroup,{props:{items:[1,2,3,4,5].map(x=>report(String(x)))}})
+    expect(wrapper.findAll('.recommend-card')).toHaveLength(3)
+    expect(wrapper.text()).toContain('查看其余 2 份')
+    await wrapper.get('.rest-toggle').trigger('click')
+    expect(wrapper.findAll('.recommend-card')).toHaveLength(5)
+    expect(wrapper.get('.rest-toggle').attributes('aria-expanded')).toBe('true')
+  })
+
+  it('每个标签单选并可一次应用多个不同条件', async () => {
+    const wrapper=mount(FollowUpCard,{props:{followUp:{title:'继续细化',prompt:'可选',remaining_rounds:2,allow_more:true,allow_custom:true,allow_skip:true,groups:[
+      {tag_name:'行业分类',label:'行业',options:[{label:'制造业',value:'制造业',count:2},{label:'服务业',value:'服务业',count:1}]},
+      {tag_name:'企业规模',label:'规模',options:[{label:'小微',value:'小微',count:2}]},
+    ]}}})
+    await wrapper.findAll('.option-grid button')[0].trigger('click')
+    await wrapper.get('.secondary-action').trigger('click')
+    await wrapper.findAll('.option-grid button')[2].trigger('click')
+    await wrapper.get('.apply-action').trigger('click')
+    expect(wrapper.emitted('apply')?.[0]?.[0]).toEqual([
+      {tag_name:'行业分类',value:'制造业'},{tag_name:'企业规模',value:'小微'},
+    ])
   })
 })
 

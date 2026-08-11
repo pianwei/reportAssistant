@@ -112,7 +112,7 @@ def test_finish_without_tags_uses_completeness_ranking(data_dir, tmp_path):
     app = create_app(settings_for(data_dir, tmp_path), EmptyExtractor())
     with TestClient(app) as client:
         first = client.post("/api/v1/chat", json={"user_id": "alice", "message": "给我推荐几个优秀报告"}).json()
-        assert first["status"] == "needs_clarification"
+        assert first["status"] == "recommendations"
         finished = client.post("/api/v1/chat", json={
             "session_id": first["session_id"], "message": "按现有信息生成"
         }).json()

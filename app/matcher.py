@@ -91,16 +91,15 @@ def tag_similarity(name: str, query: str, report: str) -> float:
         return 0.0
     if name == AMOUNT_TAG:
         return _amount_similarity(query, report)
-    similarity = _text_similarity(query, report)
     if name not in TEXT_TAGS:
-        a, b = normalize(query), normalize(report)
-        if a and (a in b or b in a):
-            return max(similarity, 0.85)
-    return similarity
+        # 分类、布尔和枚举标签只接受归一化后的精确值；避免“大型企业”
+        # 因字面相似而误命中“中型企业”。固定同义词在 normalize 中处理。
+        return 1.0 if normalize(query) == normalize(report) else 0.0
+    return _text_similarity(query, report)
 
 
 def rank_reports(
-    reports: list[dict[str, Any]], query_tags: list[dict[str, Any]], limit: int = 3
+    reports: list[dict[str, Any]], query_tags: list[dict[str, Any]], limit: int | None = 3
 ) -> list[Recommendation]:
     results: list[Recommendation] = []
     if not query_tags:
@@ -123,7 +122,7 @@ def rank_reports(
                 matched_tags=[], unmatched_tags=[], missing_tags=[], summary=report["summary"],
             ))
         results.sort(key=lambda item: (-item.score, item.report_name, item.report_id))
-        return results[:limit]
+        return results if limit is None else results[:limit]
     total_weight = sum(TAG_WEIGHTS.get(tag["name"], 1.0) for tag in query_tags) or 1.0
     for report in reports:
         report_tags = {tag["name"]: tag["value"] for tag in report["tags"]}
@@ -166,15 +165,15 @@ def rank_reports(
             )
         )
     results.sort(key=lambda item: (-item.score, -len(item.matched_tags), item.report_name, item.report_id))
-    return results[:limit]
+    return results if limit is None else results[:limit]
 
 
 def filter_reports(
-    reports: list[dict[str, Any]], query_tags: list[dict[str, Any]], limit: int = 3
+    reports: list[dict[str, Any]], query_tags: list[dict[str, Any]], limit: int | None = None
 ) -> list[Recommendation]:
     if not query_tags:
         return rank_reports(reports, [], limit)
-    ranked = rank_reports(reports, query_tags, max(len(reports), limit))
+    ranked = rank_reports(reports, query_tags, None)
     matched = [
         item for item in ranked
         if not item.unmatched_tags and not item.missing_tags
@@ -184,7 +183,7 @@ def filter_reports(
         item.recommendation_reason = "满足全部已确认筛选条件：" + "、".join(
             detail.name for detail in item.matched_tags
         ) + "。"
-    return matched[:limit]
+    return matched if limit is None else matched[:limit]
 
 
 def related_reports(

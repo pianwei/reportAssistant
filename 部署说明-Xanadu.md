@@ -6,8 +6,8 @@
 - 链路：公网入口 → WireGuard `wg-aliyun` → Xanadu 系统 Nginx → Dify Nginx → 应用容器。
 - 应用目录：`/home/pianwei/apps/due-diligence-assistant`
 - 当前容器：`due-diligence-assistant`
-- 当前镜像：`due-diligence-assistant:20260810-public`
-- 回滚容器：`due-diligence-assistant-pre-public-20260810`（已停止，保留旧镜像）。
+- 当前镜像：`due-diligence-assistant:20260811-results-first-final`
+- 回滚容器：`due-diligence-assistant-pre-results-first-final-20260811`（已停止，保留上一版本镜像）。
 - 重启策略：`unless-stopped`
 - 宿主机监听：`127.0.0.1:8010`，不绕过 Nginx 直接开放端口。
 - SQLite：`/home/pianwei/apps/due-diligence-assistant/runtime/app.db`
