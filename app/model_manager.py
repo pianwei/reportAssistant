@@ -230,7 +230,7 @@ class ModelManager:
             return []
 
     async def match_reports_from_tags(
-        self, question: str, report_tags: list[dict[str, Any]]
+        self, question: str, report_tags: dict[str, Any]
     ) -> dict[str, Any] | None:
         """Use the active model to interpret non-normalized report tags.
 
@@ -241,20 +241,39 @@ class ModelManager:
 
         prompt = (
             "你是银行尽调报告标签统计分析器。用户会询问哪些报告满足某个语义或数值条件。"
+            "你必须在一次分析中完成全部报告的判断，并一次性输出所有符合条件的报告ID。"
+            "输入中的每个对象是一份报告，包含report_id及本次条件相关的selected_tags。"
+            "必须逐对象判断标签值是否满足条件，再汇总所有符合的report_id。"
             "标签值未经规范化，你需要结合标签名称和原始值理解同义表达，例如科技企业可能体现在"
             "行业、主营业务、企业资质等不同标签中。金额比较必须正确换算元、万和亿，并理解区间。"
+            "对于金额区间，条件“大于X”表示区间内存在严格大于X的金额；例如1亿-5亿元符合大于1亿元。"
             "只能依据输入JSON，不得使用外部事实，不得编造报告。只返回JSON："
             '{"matched_report_ids":["输入中存在的report_id"],"criteria_summary":"简短判断口径"}。'
             "不确定时保守匹配，matched_report_ids不得包含输入中不存在的ID。"
         )
-        payload = {"question": question, "reports": report_tags}
+        all_columns = report_tags.get("tag_columns", {})
+        available_names = list(all_columns)
+        selected_names = await self.select_statistic_tag_names(question, available_names)
+        report_ids = report_tags.get("report_ids", [])
+        selected_reports = [
+            {
+                "report_id": report_id,
+                "selected_tags": {
+                    name: all_columns[name][index]
+                    for name in selected_names
+                    if name in all_columns and index < len(all_columns[name])
+                },
+            }
+            for index, report_id in enumerate(report_ids)
+        ]
+        payload = {"question": question, "reports": selected_reports}
         messages = [
             {"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
         for _ in range(2):
             try:
-                content = await self._complete(messages, True, 1000)
+                content = await self._complete(messages, True, 8000)
                 try:
                     data = json.loads(content)
                 except json.JSONDecodeError:
@@ -262,7 +281,7 @@ class ModelManager:
                     if start < 0 or end <= start:
                         raise
                     data = json.loads(content[start : end + 1])
-                valid_ids = {item["report_id"] for item in report_tags}
+                valid_ids = set(report_ids)
                 result_ids: list[str] = []
                 for report_id in data.get("matched_report_ids", []):
                     report_id = str(report_id)
@@ -275,6 +294,38 @@ class ModelManager:
             except Exception:
                 continue
         return None
+
+    async def select_statistic_tag_names(
+        self, question: str, available_names: list[str]
+    ) -> list[str]:
+        """Select relevant columns generically before the one full ID-matching call."""
+        import json
+
+        prompt = (
+            "你是尽调报告统计字段选择器。根据用户条件，从给定标准标签名中选择判断报告是否符合条件"
+            "所必需的全部标签。组合条件必须选择多列；不得选择无关列。只返回JSON："
+            '{"tag_names":["给定标签名"]}。'
+        )
+        payload = {"question": question, "available_tag_names": available_names}
+        try:
+            content = await self._complete([
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ], True, 500)
+            data = json.loads(content)
+            selected = []
+            for name in data.get("tag_names", []):
+                name = str(name)
+                if name in available_names and name not in selected:
+                    selected.append(name)
+            if selected:
+                return selected
+        except Exception:
+            pass
+        # A failed selector must not silently discard relevant data. The full
+        # snapshot remains the safe fallback and the matching call can report
+        # its own timeout/error explicitly.
+        return available_names
 
     async def answer_competition(self, history: list[dict[str, str]], question: str) -> str:
         prompt = (

@@ -6,6 +6,7 @@ from collections import Counter
 from typing import Any
 
 from app.database import Database
+from app.llm import LLMError
 from app.model_manager import ModelManager
 from app.taxonomy import TAG_DIMENSIONS
 
@@ -15,7 +16,10 @@ SUGGESTION_TEMPLATES: dict[str, list[str]] = {
     "recommendation": ["给我推荐几个优秀的尽调报告", "推荐适合科技型小微企业的尽调案例"],
     "filter": ["筛选科学研究和技术服务业的报告", "查找流动资金贷款相关报告"],
     "statistics": ["现在有多少篇尽调报告？", "哪个行业的报告最多？"],
-    "qa": ["比赛要求是什么？", "比赛评分标准有哪些？"],
+    "qa": [
+        "比赛参赛要求有哪些？", "比赛评分标准是什么？", "比赛报名流程是什么？",
+        "比赛时间如何安排？", "比赛需要提交哪些材料？", "比赛结果如何评定？",
+    ],
 }
 
 FEATURE_CARDS = [
@@ -89,6 +93,26 @@ class FeatureService:
     async def suggestions(self, user_id: str, session_id: str | None,
                           previous_batch_id: str | None = None) -> dict[str, Any]:
         previous = self.database.get_suggestion_batch(previous_batch_id, user_id)
+        session = self.database.get_session(session_id) if session_id else None
+        if session and session.get("active_intent") == "qa":
+            prior_texts = {item.get("text") for item in previous}
+            candidates = [
+                text for text in SUGGESTION_TEMPLATES["qa"] if text not in prior_texts
+            ]
+            if len(candidates) < 3:
+                candidates = list(SUGGESTION_TEMPLATES["qa"])
+            items = [{"text": text, "intent": "qa"} for text in candidates[:3]]
+            batch_id = f"sug_{uuid.uuid4().hex}"
+            self.database.save_suggestion_batch(batch_id, user_id, items)
+            return {
+                "suggestions": items, "source": "qa_templates", "batch_id": batch_id,
+            }
+        if session and session.get("active_intent") in {"recommendation", "filter"}:
+            fixed = [
+                {"text": "新筛选", "intent": "filter"},
+            ]
+        else:
+            fixed = []
         usage = self.database.user_intent_usage(user_id)
         targets = self._target_intents(usage, previous)
         history = self.database.recent_user_messages(user_id, 20)
@@ -112,6 +136,7 @@ class FeatureService:
             items.append(item)
             used_texts.add(item["text"])
         batch_id = f"sug_{uuid.uuid4().hex}"
+        items = fixed + [item for item in items if item["text"] not in {x["text"] for x in fixed}]
         self.database.save_suggestion_batch(batch_id, user_id, items)
         return {
             "suggestions": items, "source": "model" if generated else "fallback",
@@ -119,115 +144,107 @@ class FeatureService:
         }
 
     @staticmethod
-    def _tag_snapshot(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Build the complete, model-facing tag JSON from the startup dataset."""
-        return [
-            {
-                "report_id": report["report_id"],
-                "report_name": report["report_name"],
-                "report_type": report["report_type"],
-                "tags": [
-                    {
-                        "dimension": tag.get("dimension", ""),
-                        "name": tag.get("name", ""),
-                        "value": tag.get("value", ""),
-                        "completeness": tag.get("completeness", ""),
-                        "note": tag.get("note", ""),
-                    }
-                    for tag in report.get("tags", [])
-                ],
-            }
+    def _tag_snapshot(reports: list[dict[str, Any]]) -> dict[str, Any]:
+        """Build one compact, complete, columnar tag snapshot for model analysis."""
+        report_ids = [report["report_id"] for report in reports]
+        tag_maps = [
+            {tag.get("name", ""): tag.get("value", "") for tag in report.get("tags", [])}
             for report in reports
         ]
+        tag_names = sorted({name for tags in tag_maps for name in tags if name})
+        return {
+            "report_ids": report_ids,
+            "tag_columns": {
+                name: [tags.get(name, "") for tags in tag_maps]
+                for name in tag_names
+            },
+        }
 
     @staticmethod
-    def _amount_condition(question: str) -> tuple[str, float] | None:
-        match = re.search(
+    def _amount_in_ten_thousands(number: str, unit: str) -> float:
+        value = float(number)
+        if unit == "亿":
+            return value * 10000
+        if unit == "元":
+            return value / 10000
+        return value
+
+    @classmethod
+    def numeric_report_ids(
+        cls, question: str, reports: list[dict[str, Any]]
+    ) -> tuple[str, set[str]] | None:
+        """Apply exact numeric comparisons uniformly to supported amount tags."""
+        tag_aliases = (
+            ("授信金额", ("授信金额", "授信额度", "贷款金额", "融资金额", "额度")),
+            ("最新一期财报总资产", ("总资产",)),
+            ("最新一期财报总负债", ("总负债",)),
+            ("最新一期财报净利润", ("净利润",)),
+            ("最新一期经营性净现金流", ("经营性净现金流", "经营现金流")),
+        )
+        tag_name = next(
+            (name for name, aliases in tag_aliases if any(alias in question for alias in aliases)),
+            None,
+        )
+        if tag_name is None:
+            return None
+        condition = re.search(
             r"(大于|超过|高于|不少于|至少|小于|低于|少于|不超过|至多)\s*"
             r"(\d+(?:\.\d+)?)\s*(亿|万|元)?",
             question.replace(",", ""),
         )
-        if not match:
+        if not condition:
             return None
-        operator, number, unit = match.groups()
-        value = float(number)
-        if unit == "亿":
-            value *= 10000
-        elif unit == "元":
-            value /= 10000
-        normalized = {
-            "大于": "gt", "超过": "gt", "高于": "gt",
-            "不少于": "gte", "至少": "gte",
-            "小于": "lt", "低于": "lt", "少于": "lt",
-            "不超过": "lte", "至多": "lte",
-        }[operator]
-        return normalized, value
-
-    @staticmethod
-    def _amount_values(value: str) -> list[float]:
-        result: list[float] = []
-        for number, unit in re.findall(r"(\d+(?:\.\d+)?)\s*(亿|万|元)?", value.replace(",", "")):
-            amount = float(number)
-            if unit == "亿":
-                amount *= 10000
-            elif unit == "元":
-                amount /= 10000
-            result.append(amount)
-        return result
-
-    @classmethod
-    def _matches_amount(cls, report: dict[str, Any], condition: tuple[str, float]) -> bool:
-        operator, threshold = condition
-        values = [
-            amount
-            for tag in report.get("tags", [])
-            if tag.get("name") == "授信金额"
-            for amount in cls._amount_values(tag.get("value", ""))
-        ]
+        operator, number, unit = condition.groups()
+        threshold = cls._amount_in_ten_thousands(number, unit or "万")
         compare = {
-            "gt": lambda value: value > threshold,
-            "gte": lambda value: value >= threshold,
-            "lt": lambda value: value < threshold,
-            "lte": lambda value: value <= threshold,
+            "大于": lambda value: value > threshold,
+            "超过": lambda value: value > threshold,
+            "高于": lambda value: value > threshold,
+            "不少于": lambda value: value >= threshold,
+            "至少": lambda value: value >= threshold,
+            "小于": lambda value: value < threshold,
+            "低于": lambda value: value < threshold,
+            "少于": lambda value: value < threshold,
+            "不超过": lambda value: value <= threshold,
+            "至多": lambda value: value <= threshold,
         }[operator]
-        return any(compare(value) for value in values)
-
-    @staticmethod
-    def _fallback_semantic_ids(question: str, reports: list[dict[str, Any]]) -> list[str]:
-        if "科技" in question:
-            terms = ("科技", "技术", "软件", "半导体", "生物医药", "研发")
-        else:
-            cleaned = re.sub(r"哪些|有哪些|多少|几篇|几份|几个|有几|报告|统计|查询|相关|企业|的", " ", question)
-            terms = tuple(word for word in re.split(r"[\s，。！？、]+", cleaned) if len(word) >= 2)
-        result = []
+        unavailable = ("不可提取", "未披露", "未知", "不清楚")
+        matched_ids: set[str] = set()
         for report in reports:
-            haystack = " ".join(tag.get("value", "") for tag in report.get("tags", []))
-            if terms and any(term in haystack for term in terms):
-                result.append(report["report_id"])
-        return result
+            values = [
+                tag.get("value", "") for tag in report.get("tags", [])
+                if tag.get("name") == tag_name
+            ]
+            for value in values:
+                if any(marker in value for marker in unavailable):
+                    continue
+                amounts = re.findall(r"(\d+(?:\.\d+)?)\s*(亿|万|元)?", value.replace(",", ""))
+                for index, (raw_number, raw_unit) in enumerate(amounts):
+                    inferred_unit = raw_unit
+                    if not inferred_unit and index + 1 < len(amounts):
+                        inferred_unit = amounts[index + 1][1]
+                    amount = cls._amount_in_ten_thousands(raw_number, inferred_unit or "万")
+                    if compare(amount):
+                        matched_ids.add(report["report_id"])
+                        break
+                if report["report_id"] in matched_ids:
+                    break
+        return tag_name, matched_ids
 
     async def _semantic_report_statistics(
         self, question: str, reports: list[dict[str, Any]]
     ) -> tuple[str, dict[str, Any]]:
         snapshot = self._tag_snapshot(reports)
         analysis = await self.model_manager.match_reports_from_tags(question, snapshot)
-        amount_condition = self._amount_condition(question)
-        if amount_condition:
-            # The model interprets the raw context, while the backend enforces
-            # recognizable amount comparisons to keep numeric results exact.
-            matched_ids = {
-                report["report_id"] for report in reports
-                if self._matches_amount(report, amount_condition)
-            }
-        else:
-            matched_ids = set(
-                (analysis or {}).get("matched_report_ids")
-                or self._fallback_semantic_ids(question, reports)
-            )
-        matched = sorted(
-            (report for report in reports if report["report_id"] in matched_ids),
-            key=lambda report: (report["report_name"], report["report_id"]),
-        )
+        if analysis is None:
+            raise LLMError("条件统计模型分析失败，请稍后重试")
+        matched_ids = analysis.get("matched_report_ids", [])
+        reports_by_id = {report["report_id"]: report for report in reports}
+        matched = [
+            reports_by_id[report_id]
+            for report_id in matched_ids
+            if report_id in reports_by_id
+        ]
         items = [
             {
                 "report_id": report["report_id"],
@@ -265,13 +282,40 @@ class FeatureService:
     async def statistics_for_question(self, question: str) -> tuple[str, dict[str, Any]]:
         reports = self.database.all_reports_with_tags()
         all_tags = [tag for report in reports for tag in report["tags"]]
+        numeric_match = self.numeric_report_ids(question, reports)
+        if numeric_match is not None:
+            _, matched_ids = numeric_match
+            matched = [report for report in reports if report["report_id"] in matched_ids]
+            items = [
+                {
+                    "report_id": report["report_id"],
+                    "report_name": report["report_name"],
+                    "report_type": report["report_type"],
+                }
+                for report in matched
+            ]
+            ratio_question = any(word in question for word in ("占比", "比例"))
+            if ratio_question:
+                ratio = round(len(items) / len(reports) * 100, 2) if reports else 0.0
+                answer = f"符合条件的报告共 {len(items)} 份，占全部 {len(reports)} 份报告的 {ratio:g}%。"
+                breakdown = [
+                    {"label": "符合条件", "count": len(items)},
+                    {"label": "全部报告", "count": len(reports)},
+                ]
+            else:
+                answer = f"共找到 {len(items)} 份符合条件的报告。"
+                breakdown = []
+            return answer, {
+                "metric": "numeric_report_query", "title": "报告条件统计",
+                "value": len(items), "breakdown": breakdown, "reports": items,
+            }
         report_count_question = bool(re.search(
             r"(?:多少|几)(?:篇|份|个).*报告|报告.*(?:多少|几)(?:篇|份|个)|报告(?:数|总数)",
             question,
         ))
         count_qualifier = re.sub(
             r"请问|当前|现在|目前|系统|数据库|我们|我行|一共|总共|共有|有|"
-            r"尽调|报告|多少|几篇|几份|几个|篇|份|个|数|总数|中|里|的|[\s，。！？?]",
+            r"统计|查询|尽调|报告|多少|几篇|几份|几个|篇|份|个|数|总数|中|里|的|[\s，。！？?]",
             "",
             question,
         )

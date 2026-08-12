@@ -108,6 +108,40 @@ def test_suggestions_rotate_across_four_features(data_dir, tmp_path):
     assert not ({item["text"] for item in first["suggestions"]} & {item["text"] for item in second["suggestions"]})
 
 
+def test_qa_followup_suggestions_only_contain_competition_questions(data_dir, tmp_path):
+    app = create_app(settings_for(data_dir, tmp_path), RoutingExtractor())
+
+    async def fake_competition_answer(history, question):
+        return "请以主办方发布的正式比赛规则为准。"
+
+    app.state.model_manager.answer_competition = fake_competition_answer
+    with TestClient(app) as client:
+        answer = client.post("/api/v1/chat", json={
+            "user_id": "alice", "message": "比赛规则是什么？",
+        }).json()
+        suggestions = client.post("/api/v1/suggestions", json={
+            "user_id": "alice", "session_id": answer["session_id"],
+        }).json()["suggestions"]
+
+    assert len(suggestions) == 3
+    assert {item["intent"] for item in suggestions} == {"qa"}
+    assert all("比赛" in item["text"] for item in suggestions)
+    assert all("尽调报告" not in item["text"] for item in suggestions)
+
+
+def test_report_flow_suggestions_include_reset_action(data_dir, tmp_path):
+    app = create_app(settings_for(data_dir, tmp_path), RoutingExtractor())
+    with TestClient(app) as client:
+        first = client.post("/api/v1/chat", json={
+            "user_id": "flow-suggestions", "message": "筛选小微企业报告",
+        }).json()
+        suggestions = client.post("/api/v1/suggestions", json={
+            "user_id": "flow-suggestions", "session_id": first["session_id"],
+        }).json()["suggestions"]
+
+    assert suggestions[0] == {"text": "新筛选", "intent": "filter"}
+
+
 def test_finish_without_tags_uses_completeness_ranking(data_dir, tmp_path):
     app = create_app(settings_for(data_dir, tmp_path), EmptyExtractor())
     with TestClient(app) as client:

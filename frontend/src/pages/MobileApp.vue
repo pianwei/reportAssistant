@@ -6,7 +6,7 @@ import ReportResultsGroup from '../components/ReportResultsGroup.vue'
 const userId = ref(localStorage.getItem('dda_user_id') || `demo_${crypto.randomUUID().slice(0, 8)}`)
 localStorage.setItem('dda_user_id', userId.value)
 const bootstrap = ref<any>(null), homeSuggestions = ref<any[]>([])
-const messages = ref<any[]>([]), sessionId = ref<string|null>(null), input = ref('')
+const messages = ref<any[]>([]), sessionId = ref<string|null>(localStorage.getItem('dda_session_id')), input = ref('')
 const loading = ref(false), error = ref('')
 const featureIcons:Record<string,string>={recommendation:'✦',filter:'⌕',statistics:'▥',qa:'●',spark:'✦',chart:'▥',chat:'●'}
 const featureNames:Record<string,string>={recommendation:'案例推荐',filter:'多维筛选',statistics:'数据统计',qa:'比赛问答',greeting:'助手问候',unsupported:'能力边界'}
@@ -15,6 +15,16 @@ const assistantIntro = computed(() => String(bootstrap.value?.assistant?.intro |
 async function init(){
   bootstrap.value=await api(`/ui/bootstrap?user_id=${encodeURIComponent(userId.value)}`)
   homeSuggestions.value=bootstrap.value.default_suggestions
+  if(sessionId.value){
+    try{
+      const conversation:any=await api(`/conversations/${encodeURIComponent(sessionId.value)}`)
+      if(conversation.user_id!==userId.value)throw new Error('会话用户不一致')
+      messages.value=conversation.messages.map((m:any)=>({role:m.role,content:m.content,payload:m.payload,suggestions:[]}))
+    }catch{
+      sessionId.value=null
+      localStorage.removeItem('dda_session_id')
+    }
+  }
   await refreshSuggestions()
 }
 async function refreshSuggestions(attach=false){
@@ -33,6 +43,7 @@ async function appendResponse(request:any, userLabel?:string){
   try{
     const body:any=await post('/chat',{user_id:userId.value,session_id:sessionId.value,...request})
     sessionId.value=body.session_id
+    localStorage.setItem('dda_session_id',body.session_id)
     messages.value.push({role:'assistant',content:body.assistant_message,payload:body,suggestions:[]})
     await refreshSuggestions(true)
   }catch(e:any){error.value=e.message}finally{loading.value=false}
@@ -44,7 +55,7 @@ async function send(text=input.value){
 }
 function openFeature(card:any){messages.value.push({role:'assistant',content:card.assistant_example,payload:{guide:true,intent:card.id,examples:card.input_examples},suggestions:[]})}
 async function related(item:any){if(sessionId.value)await appendResponse({action:{type:'related_reports',report_id:item.report_id}},`查看“${item.report_name}”的关联案例`)}
-function newChat(){sessionId.value=null;messages.value=[];error.value='';refreshSuggestions()}
+function newChat(){sessionId.value=null;localStorage.removeItem('dda_session_id');messages.value=[];error.value='';refreshSuggestions()}
 onMounted(init)
 </script>
 

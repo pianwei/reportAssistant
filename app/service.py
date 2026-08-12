@@ -18,6 +18,7 @@ from app.taxonomy import BUSINESS, CUSTOMER, TAG_DIMENSIONS
 
 MIN_CONFIDENCE = 0.5
 FLOW_INTENTS = {"recommendation", "filter"}
+CONTEXTUAL_INTENTS = {"recommendation", "filter", "statistics", "qa"}
 MODEL_INTENTS = {
     "report_recommendation": "recommendation",
     "report_filter": "filter",
@@ -99,7 +100,7 @@ class ChatService:
             r"(?:大于|超过|高于|不少于|至少|小于|低于|少于|不超过|至多).*报告",
             message,
         ):
-            return "statistics"
+            return "filter"
         if re.search(r"比赛|参赛|评分|报名|赛程|主办方", message):
             return "qa"
         if re.search(r"筛选|过滤|查找|找出|检索|列出|符合.*条件|展示.*报告", message):
@@ -201,7 +202,8 @@ class ChatService:
         assert message is not None
         session = self.database.get_session(session_id) or {}
         active = session.get("active_intent") or "unknown"
-        history = self.database.get_messages(session_id)
+        history = self.database.get_recent_user_questions(session_id, limit=5)
+        normalized = re.sub(r"[\s，。！？,.!?]", "", message)
 
         if self._is_greeting(message):
             self.database.add_message(
@@ -214,9 +216,27 @@ class ChatService:
                 collected_tags=self._collected(self.database.get_session_tags(session_id)),
             ))
 
+        if normalized == "新筛选":
+            intent = "filter"
+            self.database.clear_session_tags(session_id)
+            self.database.set_session_intent(session_id, intent)
+            self.database.add_message(
+                session_id, "user", message, request_id=request_id,
+                message_type="text", intent=intent,
+            )
+            return self._finish(ChatResponse(
+                request_id=request_id, session_id=session_id, intent=intent,
+                status="needs_clarification",
+                assistant_message="你有什么其他想要了解的尽调报告吗？",
+                collected_tags=[], information_incomplete=True,
+            ))
+
         extraction, _fallback_used = await self._extract(history, message, None, active)
         if extraction.intent == "provide_information":
-            intent = active if active in FLOW_INTENTS else (self._keyword_intent(message) or "recommendation")
+            intent = (
+                active if active in CONTEXTUAL_INTENTS
+                else (self._keyword_intent(message) or "recommendation")
+            )
         else:
             intent = MODEL_INTENTS[extraction.intent]
         keyword = self._keyword_intent(message)
@@ -224,6 +244,10 @@ class ChatService:
         # an occasional model misclassification (for example “推荐…报告”被判为 unsupported).
         if keyword is not None:
             intent = keyword
+        elif active in FLOW_INTENTS and intent in FLOW_INTENTS:
+            # 推荐与筛选共享同一组会话标签。没有明确功能词的简短补充
+            # 只增加/更新字段，不改变当前 Top 3 或全量筛选结果模式。
+            intent = active
         elif intent == "unsupported" and active in FLOW_INTENTS:
             intent = active
         # 比赛问答必须有明确比赛上下文；防止模型把一般知识问题误判为比赛问答。
@@ -291,4 +315,28 @@ class ChatService:
             for tag in extracted if tag.name in TAG_DIMENSIONS
         ]
         self.database.upsert_session_tags(session_id, valid)
+        numeric_match = self.features.numeric_report_ids(
+            message, self.database.all_reports_with_tags()
+        )
+        if intent == "filter" and numeric_match is not None:
+            numeric_tag_name, matched_ids = numeric_match
+            reports = self.database.all_reports_with_tags()
+            other_tags = [tag for tag in valid if tag["name"] != numeric_tag_name]
+            candidates = (
+                filter_reports(reports, other_tags, None)
+                if other_tags else rank_reports(reports, [], None)
+            )
+            recommendations = [
+                item for item in candidates if item.report_id in matched_ids
+            ]
+            for item in recommendations:
+                item.score = 100
+                item.recommendation_reason = "满足问题中的数值条件及其他已确认条件。"
+            return self._finish(ChatResponse(
+                request_id=request_id, session_id=session_id, intent=intent,
+                status="filter_results",
+                assistant_message=f"共找到 {len(recommendations)} 份符合条件的报告。",
+                collected_tags=self._collected(self.database.get_session_tags(session_id)),
+                recommendations=recommendations,
+            ))
         return await self._report_results(request_id, session_id, intent)

@@ -213,6 +213,17 @@ class Database:
             ).fetchall()
         return [{"role": row["role"], "content": row["content"]} for row in rows]
 
+    def get_recent_user_questions(self, session_id: str, limit: int = 5) -> list[dict[str, str]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT content FROM (SELECT id, content FROM messages
+                WHERE session_id=? AND role='user' AND message_type='text'
+                AND (intent IS NULL OR intent<>'greeting')
+                ORDER BY id DESC LIMIT ?) ORDER BY id""",
+                (session_id, limit),
+            ).fetchall()
+        return [{"role": "user", "content": row["content"]} for row in rows]
+
     def get_conversation(self, session_id: str) -> dict[str, Any] | None:
         session = self.get_session(session_id)
         if not session:
@@ -281,6 +292,15 @@ class Database:
                 (session_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def clear_session_tags(self, session_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM session_tags WHERE session_id=?", (session_id,))
+            conn.execute(
+                """UPDATE sessions SET expected_tag=NULL,pending_tag_value=NULL,
+                clarification_count=0,updated_at=CURRENT_TIMESTAMP WHERE session_id=?""",
+                (session_id,),
+            )
 
     def clarification_count(self, session_id: str) -> int:
         session = self.get_session(session_id)

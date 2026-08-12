@@ -75,6 +75,58 @@ def test_keyword_router_falls_back_when_model_is_unavailable(data_dir, tmp_path)
     assert response.json()["statistic"]["value"] == 1
 
 
+def test_intent_extractor_receives_only_the_latest_five_rounds(data_dir, tmp_path):
+    class RecordingExtractor:
+        def __init__(self):
+            self.histories = []
+
+        async def extract(self, history, message, expected_tag=None):
+            self.histories.append(list(history))
+            return ModelExtraction(intent="report_recommendation", tags=[])
+
+    extractor = RecordingExtractor()
+    app = create_app(settings_for(data_dir, tmp_path), extractor)
+    with TestClient(app) as client:
+        session_id = None
+        for index in range(1, 8):
+            body = {"message": f"推荐报告，第{index}轮"}
+            if session_id:
+                body["session_id"] = session_id
+            else:
+                body["user_id"] = "alice"
+            session_id = client.post("/api/v1/chat", json=body).json()["session_id"]
+
+    latest_history = extractor.histories[-1]
+    assert len(latest_history) == 5
+    assert {item["role"] for item in latest_history} == {"user"}
+    assert "第1轮" not in " ".join(item["content"] for item in latest_history)
+    assert "第2轮" in latest_history[0]["content"]
+
+
+def test_provide_information_continues_statistics_intent(data_dir, tmp_path):
+    class ContextExtractor:
+        async def extract(self, history, message, expected_tag=None):
+            if not history:
+                return ModelExtraction(intent="report_statistics", tags=[])
+            return ModelExtraction(intent="provide_information", tags=[])
+
+    app = create_app(settings_for(data_dir, tmp_path), ContextExtractor())
+    async def fake_statistics(_question):
+        return "统计完成。", {"metric": "test", "title": "测试", "value": 1, "breakdown": []}
+    app.state.feature_service.statistics_for_question = fake_statistics
+    with TestClient(app) as client:
+        first = client.post("/api/v1/chat", json={
+            "user_id": "alice", "message": "统计报告数量",
+        }).json()
+        followup = client.post("/api/v1/chat", json={
+            "session_id": first["session_id"], "message": "那小微企业呢",
+        }).json()
+
+    assert followup["session_id"] == first["session_id"]
+    assert followup["intent"] == "statistics"
+    assert followup["status"] == "statistics"
+
+
 def test_greeting_uses_fixed_capability_message_without_model_routing(data_dir, tmp_path):
     app = create_app(settings_for(data_dir, tmp_path), IntentExtractor())
     with TestClient(app) as client:

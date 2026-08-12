@@ -101,6 +101,30 @@ def test_user_can_replace_filter_conditions_by_sending_a_new_question(data_dir,t
     assert {x["report_id"] for x in current["recommendations"]} == {"r1","r2"}
 
 
+def test_same_session_accumulates_fields_and_new_filter_clears_without_results(data_dir,tmp_path):
+    app=_app_with_reports(data_dir,tmp_path)
+    with TestClient(app) as client:
+        first=client.post("/api/v1/chat",json={
+            "user_id":"accumulate", "message":"筛选制造业报告",
+        }).json()
+        second=client.post("/api/v1/chat",json={
+            "session_id":first["session_id"], "message":"再加上小微企业",
+        }).json()
+        reset=client.post("/api/v1/chat",json={
+            "session_id":first["session_id"], "message":"新筛选",
+        }).json()
+
+    assert {tag["name"] for tag in second["collected_tags"]} == {"行业分类", "企业规模"}
+    assert second["intent"] == "filter"
+    assert second["status"] == "filter_results"
+    assert {x["report_id"] for x in second["recommendations"]} == {"r1", "r2"}
+    assert reset["intent"] == "filter"
+    assert reset["status"] == "needs_clarification"
+    assert reset["assistant_message"] == "你有什么其他想要了解的尽调报告吗？"
+    assert reset["collected_tags"] == []
+    assert reset["recommendations"] is None
+
+
 def test_removed_refinement_action_is_rejected(data_dir,tmp_path):
     app=_app_with_reports(data_dir,tmp_path)
     with TestClient(app) as client:

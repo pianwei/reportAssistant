@@ -27,9 +27,9 @@ SYSTEM_PROMPT = """你是银行尽调报告推荐助手中的信息抽取模块�
 {{"intent":"report_recommendation|report_filter|report_statistics|competition_qa|provide_information|unsupported","tags":[{{"name":"标准标签名","value":"用户原文中的值","evidence":"包含该值的用户原文片段","confidence":0.0}}],"statistic_query":"可选的统计指标"}}
 
 规则：
-1. 意图按用户最终目标判断。求数量、总数、占比、比例、分布、平均、排名、最多/最少、最高/最低或其他聚合结论时，intent=report_statistics。
+1. 意图按本轮用户的最终目标判断，并结合所提供的最近5轮上下文消解省略表达。本轮问题优先级最高；历史越近权重越高，不得让较早话题覆盖较新的话题。
 2. “几篇/几份/多少个/有多少”等数量问法必须为 report_statistics，即使句子中同时出现行业、企业、金额或“报告”。
-3. 询问“哪些/哪几份报告”满足语义或金额条件时，intent=report_statistics，并概括 statistic_query。
+3. 询问“哪些/哪几份/有哪些报告”满足条件、目标是取得报告列表时，intent=report_filter；只有询问数量、占比、分布或其他聚合结论时才是 report_statistics。
 4. 用户明确要求筛选、过滤、查找、找出或检索报告时，intent=report_filter。
 5. 用户要求推荐、匹配、寻找适合的参考案例时，intent=report_recommendation，即使同时提供客户或授信信息。
 6. 用户询问比赛要求、规则、时间、评分或参赛方式时，intent=competition_qa。
@@ -54,6 +54,24 @@ SYSTEM_PROMPT = """你是银行尽调报告推荐助手中的信息抽取模块�
 标准标签：
 {taxonomy}
 """
+
+
+def _weighted_history_context(history: list[dict[str, str]]) -> str:
+    """Render at most five recent user questions with increasing recency weights."""
+    recent = [
+        str(message.get("content", "")).strip()
+        for message in history
+        if message.get("role") == "user" and str(message.get("content", "")).strip()
+    ][-5:]
+    if not recent:
+        return ""
+    first_weight = 6 - len(recent)
+    lines = ["最近5条用户问题（从旧到新，权重越大越重要；不包含助手回答）："]
+    for index, question in enumerate(recent):
+        weight = first_weight + index
+        lines.append(f"[权重{weight}] 用户问题：{question}")
+    lines.append("只能使用这些用户问题辅助判断；请以当前用户问题为最高优先级。")
+    return "\n".join(lines)
 
 
 def _json_object(text: str) -> dict:
@@ -92,6 +110,9 @@ class OpenAICompatibleExtractor:
 
         taxonomy = "\n".join(f"- {name}（{dimension}）" for name, dimension in TAG_DIMENSIONS.items())
         system_prompt = SYSTEM_PROMPT.format(taxonomy=taxonomy)
+        history_context = _weighted_history_context(history)
+        if history_context:
+            system_prompt += f"\n\n{history_context}"
         if expected_tag:
             system_prompt += (
                 f"\n当前用户正在回答对“{expected_tag}”的追问。"
@@ -100,7 +121,6 @@ class OpenAICompatibleExtractor:
             )
         messages = [
             {"role": "system", "content": system_prompt},
-            *history,
             {"role": "user", "content": message},
         ]
         headers = {"Content-Type": "application/json"}

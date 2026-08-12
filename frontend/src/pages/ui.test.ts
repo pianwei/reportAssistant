@@ -47,6 +47,11 @@ describe('移动助手', () => {
     expect(JSON.parse(String(chatCall?.[1]?.body))).toMatchObject({ user_id: 'demo_12345678' })
     expect(wrapper.text()).toContain('请问客户所属行业？')
     expect(wrapper.text()).toContain('问题衍生')
+    expect(localStorage.getItem('dda_session_id')).toBe('ses-1')
+    await wrapper.get('.mobile-header button').trigger('click')
+    await flushPromises()
+    expect(localStorage.getItem('dda_session_id')).toBeNull()
+    expect(wrapper.find('.home-panel').exists()).toBe(true)
   })
 })
 
