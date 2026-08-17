@@ -1,144 +1,245 @@
 from __future__ import annotations
 
 import json
-import sqlite3
-from pathlib import Path
+from datetime import date, datetime
 from typing import Any, Iterable
+from urllib.parse import parse_qs, unquote, urlparse
+
+import pymysql
+from pymysql.cursors import DictCursor
 
 from app.loader import LoadedReport
 
 
 SCHEMA = """
-PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS reports (
-    report_id TEXT PRIMARY KEY, report_name TEXT NOT NULL, report_type TEXT NOT NULL,
-    summary_json TEXT NOT NULL, source_file TEXT NOT NULL
-);
+    report_id VARCHAR(128) PRIMARY KEY,
+    report_name VARCHAR(512) NOT NULL,
+    report_type VARCHAR(255) NOT NULL,
+    summary_json LONGTEXT NOT NULL,
+    source_file TEXT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS report_tags (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    report_id TEXT NOT NULL REFERENCES reports(report_id) ON DELETE CASCADE,
-    dimension TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL,
-    completeness TEXT NOT NULL, source_text TEXT NOT NULL, note TEXT NOT NULL,
-    UNIQUE(report_id, name)
-);
-CREATE INDEX IF NOT EXISTS idx_report_tags_name ON report_tags(name);
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    report_id VARCHAR(128) NOT NULL,
+    dimension VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    value LONGTEXT NOT NULL,
+    completeness VARCHAR(64) NOT NULL,
+    source_text LONGTEXT NOT NULL,
+    note LONGTEXT NOT NULL,
+    UNIQUE KEY uq_report_tags_report_name (report_id, name),
+    KEY idx_report_tags_name (name),
+    CONSTRAINT fk_report_tags_report FOREIGN KEY (report_id)
+        REFERENCES reports(report_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS sessions (
-    session_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL DEFAULT 'legacy',
-    title TEXT NOT NULL DEFAULT '新会话',
-    feature TEXT NOT NULL DEFAULT 'recommendation',
-    active_intent TEXT NOT NULL DEFAULT 'recommendation',
-    skipped_tags_json TEXT NOT NULL DEFAULT '[]',
-    clarification_count INTEGER NOT NULL DEFAULT 0,
-    refinement_count INTEGER NOT NULL DEFAULT 0,
-    expected_tag TEXT,
-    pending_tag_value TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+    session_id VARCHAR(64) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL DEFAULT 'legacy',
+    title VARCHAR(255) NOT NULL DEFAULT '新会话',
+    feature VARCHAR(32) NOT NULL DEFAULT 'recommendation',
+    active_intent VARCHAR(32) NOT NULL DEFAULT 'recommendation',
+    skipped_tags_json VARCHAR(2048) NOT NULL DEFAULT '[]',
+    clarification_count INT NOT NULL DEFAULT 0,
+    refinement_count INT NOT NULL DEFAULT 0,
+    expected_tag VARCHAR(255) NULL,
+    pending_tag_value LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_sessions_user_updated (user_id, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-    content TEXT NOT NULL,
-    message_type TEXT NOT NULL DEFAULT 'text',
-    request_id TEXT,
-    payload_json TEXT,
-    intent TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    session_id VARCHAR(64) NOT NULL,
+    role VARCHAR(16) NOT NULL,
+    content LONGTEXT NOT NULL,
+    message_type VARCHAR(32) NOT NULL DEFAULT 'text',
+    request_id VARCHAR(64) NULL,
+    payload_json LONGTEXT NULL,
+    intent VARCHAR(32) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_messages_session (session_id, id),
+    CONSTRAINT fk_messages_session FOREIGN KEY (session_id)
+        REFERENCES sessions(session_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS session_tags (
-    session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-    name TEXT NOT NULL, value TEXT NOT NULL, dimension TEXT NOT NULL,
-    confidence REAL NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(session_id, name)
-);
+    session_id VARCHAR(64) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    value LONGTEXT NOT NULL,
+    dimension VARCHAR(255) NOT NULL,
+    confidence DOUBLE NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (session_id, name),
+    CONSTRAINT fk_session_tags_session FOREIGN KEY (session_id)
+        REFERENCES sessions(session_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS model_profiles (
-    profile_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    provider TEXT NOT NULL,
+    profile_id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(80) NOT NULL UNIQUE,
+    provider VARCHAR(80) NOT NULL,
     base_url TEXT NOT NULL,
-    model TEXT NOT NULL,
-    encrypted_api_key TEXT,
-    timeout_seconds REAL NOT NULL DEFAULT 30,
-    json_mode INTEGER NOT NULL DEFAULT 1,
-    disable_thinking INTEGER NOT NULL DEFAULT 0,
-    is_active INTEGER NOT NULL DEFAULT 0,
-    last_test_status TEXT,
-    last_test_latency_ms REAL,
-    last_test_error TEXT,
-    last_test_at TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_profile
-ON model_profiles(is_active) WHERE is_active = 1;
+    model VARCHAR(255) NOT NULL,
+    encrypted_api_key LONGTEXT NULL,
+    timeout_seconds DOUBLE NOT NULL DEFAULT 30,
+    json_mode TINYINT(1) NOT NULL DEFAULT 1,
+    disable_thinking TINYINT(1) NOT NULL DEFAULT 0,
+    is_active TINYINT(1) NOT NULL DEFAULT 0,
+    last_test_status VARCHAR(32) NULL,
+    last_test_latency_ms DOUBLE NULL,
+    last_test_error LONGTEXT NULL,
+    last_test_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_model_profiles_active_updated (is_active, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS model_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_type TEXT NOT NULL,
-    profile_id TEXT,
-    success INTEGER NOT NULL,
-    latency_ms REAL,
-    error_type TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    event_type VARCHAR(32) NOT NULL,
+    profile_id VARCHAR(64) NULL,
+    success TINYINT(1) NOT NULL,
+    latency_ms DOUBLE NULL,
+    error_type LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS suggestion_batches (
-    batch_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    items_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+    batch_id VARCHAR(64) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    items_json LONGTEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 """
 
 
 MIGRATION_COLUMNS = {
     "sessions": {
-        "user_id": "TEXT NOT NULL DEFAULT 'legacy'",
-        "title": "TEXT NOT NULL DEFAULT '新会话'",
-        "feature": "TEXT NOT NULL DEFAULT 'recommendation'",
-        "active_intent": "TEXT NOT NULL DEFAULT 'recommendation'",
-        "skipped_tags_json": "TEXT NOT NULL DEFAULT '[]'",
-        "refinement_count": "INTEGER NOT NULL DEFAULT 0",
-        "expected_tag": "TEXT",
-        "pending_tag_value": "TEXT",
+        "user_id": "VARCHAR(64) NOT NULL DEFAULT 'legacy'",
+        "title": "VARCHAR(255) NOT NULL DEFAULT '新会话'",
+        "feature": "VARCHAR(32) NOT NULL DEFAULT 'recommendation'",
+        "active_intent": "VARCHAR(32) NOT NULL DEFAULT 'recommendation'",
+        "skipped_tags_json": "VARCHAR(2048) NOT NULL DEFAULT '[]'",
+        "refinement_count": "INT NOT NULL DEFAULT 0",
+        "expected_tag": "VARCHAR(255) NULL",
+        "pending_tag_value": "LONGTEXT NULL",
     },
     "messages": {
-        "message_type": "TEXT NOT NULL DEFAULT 'text'",
-        "request_id": "TEXT",
-        "payload_json": "TEXT",
-        "intent": "TEXT",
+        "message_type": "VARCHAR(32) NOT NULL DEFAULT 'text'",
+        "request_id": "VARCHAR(64) NULL",
+        "payload_json": "LONGTEXT NULL",
+        "intent": "VARCHAR(32) NULL",
     },
 }
 
 
+class _CompatRow(dict[str, Any]):
+    def __init__(self, values: dict[str, Any]):
+        super().__init__({
+            key: value.strftime("%Y-%m-%d %H:%M:%S")
+            if isinstance(value, (datetime, date)) else value
+            for key, value in values.items()
+        })
+
+    def __getitem__(self, key: str | int) -> Any:
+        if isinstance(key, int):
+            return tuple(self.values())[key]
+        return super().__getitem__(key)
+
+
+class _Result:
+    def __init__(self, rows: list[dict[str, Any]], rowcount: int):
+        self._rows = [_CompatRow(row) for row in rows]
+        self.rowcount = rowcount
+
+    def fetchone(self) -> _CompatRow | None:
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list[_CompatRow]:
+        return self._rows
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class _MySQLConnection:
+    def __init__(self, raw: Any):
+        self.raw = raw
+
+    def __enter__(self) -> "_MySQLConnection":
+        return self
+
+    def __exit__(self, exc_type, _exc, _traceback) -> None:
+        try:
+            self.rollback() if exc_type else self.commit()
+        finally:
+            self.raw.close()
+
+    def execute(self, sql: str, params: Any = None) -> _Result:
+        cursor = self.raw.cursor()
+        try:
+            cursor.execute(sql.replace("?", "%s"), params or ())
+            rows = list(cursor.fetchall()) if cursor.description else []
+            return _Result(rows, cursor.rowcount)
+        finally:
+            cursor.close()
+
+    def executescript(self, script: str) -> None:
+        for statement in script.split(";"):
+            if statement.strip():
+                self.execute(statement)
+
+    def commit(self) -> None:
+        self.raw.commit()
+
+    def rollback(self) -> None:
+        self.raw.rollback()
+
+
 class Database:
-    def __init__(self, path: Path):
-        self.path = path
+    def __init__(self, database_url: str):
+        self.database_url = database_url.strip()
 
-    def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+    def connect(self) -> _MySQLConnection:
+        if not self.database_url.startswith(("mysql://", "mysql+pymysql://")):
+            raise ValueError("DATABASE_URL 必须使用 mysql:// 或 mysql+pymysql:// 协议")
+        parsed = urlparse(self.database_url.replace("mysql+pymysql://", "mysql://", 1))
+        database_name = unquote(parsed.path.lstrip("/"))
+        if not parsed.hostname or not parsed.username or not database_name:
+            raise ValueError("DATABASE_URL 必须包含 MySQL 主机、用户名和数据库名")
+        query = parse_qs(parsed.query)
+        charset = query.get("charset", ["utf8mb4"])[0]
+        connect_timeout = int(query.get("connect_timeout", ["10"])[0])
+        raw = pymysql.connect(
+            host=parsed.hostname,
+            port=parsed.port or 3306,
+            user=unquote(parsed.username),
+            password=unquote(parsed.password or ""),
+            database=database_name,
+            charset=charset,
+            connect_timeout=connect_timeout,
+            read_timeout=30,
+            write_timeout=30,
+            autocommit=False,
+            cursorclass=DictCursor,
+        )
+        return _MySQLConnection(raw)
 
-    def _migrate(self, conn: sqlite3.Connection) -> None:
+    def _migrate(self, conn: _MySQLConnection) -> None:
         for table, definitions in MIGRATION_COLUMNS.items():
-            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            existing = {
+                row["COLUMN_NAME"]
+                for row in conn.execute(
+                    """SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?""",
+                    (table,),
+                )
+            }
             for name, definition in definitions.items():
                 if name not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
     def rebuild(self, reports: Iterable[LoadedReport]) -> tuple[int, int]:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
             conn.executescript(SCHEMA)
             self._migrate(conn)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sessions_user_updated "
-                "ON sessions(user_id, updated_at DESC)"
-            )
-            conn.execute("BEGIN IMMEDIATE")
             try:
                 conn.execute("DELETE FROM report_tags")
                 conn.execute("DELETE FROM reports")
@@ -208,7 +309,7 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute(
                 """SELECT role, content FROM (SELECT id, role, content FROM messages
-                WHERE session_id=? ORDER BY id DESC LIMIT ?) ORDER BY id""",
+                WHERE session_id=? ORDER BY id DESC LIMIT ?) AS recent_messages ORDER BY id""",
                 (session_id, limit),
             ).fetchall()
         return [{"role": row["role"], "content": row["content"]} for row in rows]
@@ -219,7 +320,7 @@ class Database:
                 """SELECT content FROM (SELECT id, content FROM messages
                 WHERE session_id=? AND role='user' AND message_type='text'
                 AND (intent IS NULL OR intent<>'greeting')
-                ORDER BY id DESC LIMIT ?) ORDER BY id""",
+                ORDER BY id DESC LIMIT ?) AS recent_questions ORDER BY id""",
                 (session_id, limit),
             ).fetchall()
         return [{"role": "user", "content": row["content"]} for row in rows]
@@ -239,19 +340,19 @@ class Database:
         session["tags"] = self.get_session_tags(session_id)
         return session
 
-    def list_conversations(self, user_id: str | None = None, limit: int = 20,
-                           cursor: str | None = None, feature: str | None = None,
-                           keyword: str | None = None) -> dict[str, Any]:
-        clauses, params = [], []
+    @staticmethod
+    def _conversation_filters(user_id: str | None = None,
+                              feature: str | None = None,
+                              keyword: str | None = None,
+                              days: int | None = None) -> tuple[list[str], list[Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
         if user_id:
             clauses.append("s.user_id=?"); params.append(user_id)
-        if cursor:
-            clauses.append("s.updated_at<?"); params.append(cursor)
         if feature:
             # A session can contain several routed functions and is then marked
-            # as ``mixed``.  Filter on the intent recorded for each user message
-            # so operators can still find (for example) statistics requests in
-            # a mixed conversation.
+            # as ``mixed``. Filter on user-message intents so operators can
+            # still locate one function inside a mixed conversation.
             if feature == "mixed":
                 clauses.append("s.feature=?"); params.append(feature)
             else:
@@ -261,8 +362,23 @@ class Database:
                 )
                 params.append(feature)
         if keyword:
-            clauses.append("EXISTS (SELECT 1 FROM messages m WHERE m.session_id=s.session_id AND m.content LIKE ?)")
+            clauses.append(
+                "EXISTS (SELECT 1 FROM messages km "
+                "WHERE km.session_id=s.session_id AND km.content LIKE ?)"
+            )
             params.append(f"%{keyword}%")
+        if days is not None:
+            clauses.append("s.created_at>=DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ? DAY)")
+            params.append(days)
+        return clauses, params
+
+    def list_conversations(self, user_id: str | None = None, limit: int = 20,
+                           cursor: str | None = None, feature: str | None = None,
+                           keyword: str | None = None,
+                           days: int | None = None) -> dict[str, Any]:
+        clauses, params = self._conversation_filters(user_id, feature, keyword, days)
+        if cursor:
+            clauses.append("s.updated_at<?"); params.append(cursor)
         where = "WHERE " + " AND ".join(clauses) if clauses else ""
         sql = f"""SELECT s.*, COUNT(m.id) message_count FROM sessions s
         LEFT JOIN messages m ON m.session_id=s.session_id {where}
@@ -274,16 +390,29 @@ class Database:
         items = rows[:limit]
         return {"items": items, "next_cursor": items[-1]["updated_at"] if has_more and items else None}
 
+    def export_conversation_messages(self, user_id: str | None = None,
+                                     feature: str | None = None,
+                                     keyword: str | None = None,
+                                     days: int | None = None) -> list[dict[str, Any]]:
+        clauses, params = self._conversation_filters(user_id, feature, keyword, days)
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        sql = f"""SELECT s.session_id,s.title,s.user_id,s.feature,
+        s.created_at AS session_created_at,s.updated_at AS session_updated_at,
+        m.id AS message_id,m.role,m.intent,m.message_type,m.request_id,
+        m.content,m.payload_json,m.created_at AS message_created_at
+        FROM sessions s LEFT JOIN messages m ON m.session_id=s.session_id
+        {where} ORDER BY s.created_at DESC,m.id ASC"""
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(sql, params)]
+
     def upsert_session_tags(self, session_id: str, tags: Iterable[dict[str, Any]]) -> None:
         with self.connect() as conn:
             for tag in tags:
-                conn.execute(
-                    """INSERT INTO session_tags(session_id,name,value,dimension,confidence)
-                    VALUES (?,?,?,?,?) ON CONFLICT(session_id,name) DO UPDATE SET
-                    value=excluded.value,dimension=excluded.dimension,confidence=excluded.confidence,
-                    updated_at=CURRENT_TIMESTAMP""",
-                    (session_id, tag["name"], tag["value"], tag["dimension"], tag["confidence"]),
-                )
+                sql = """INSERT INTO session_tags(session_id,name,value,dimension,confidence)
+                VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE
+                value=VALUES(value),dimension=VALUES(dimension),confidence=VALUES(confidence),
+                updated_at=CURRENT_TIMESTAMP"""
+                conn.execute(sql, (session_id, tag["name"], tag["value"], tag["dimension"], tag["confidence"]))
 
     def get_session_tags(self, session_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
@@ -371,10 +500,12 @@ class Database:
     def recent_user_messages(self, user_id: str, limit: int = 20) -> list[dict[str, str]]:
         with self.connect() as conn:
             rows = conn.execute(
-                """SELECT m.content,m.intent FROM messages m JOIN sessions s ON s.session_id=m.session_id
-                WHERE s.user_id=? AND m.role='user' AND s.session_id IN (
-                    SELECT session_id FROM sessions WHERE user_id=? ORDER BY updated_at DESC LIMIT 5
-                ) ORDER BY m.id DESC LIMIT ?""",
+                """SELECT m.content,m.intent FROM messages m
+                JOIN sessions s ON s.session_id=m.session_id
+                JOIN (SELECT session_id FROM sessions WHERE user_id=?
+                      ORDER BY updated_at DESC LIMIT 5) AS recent_sessions
+                  ON recent_sessions.session_id=s.session_id
+                WHERE s.user_id=? AND m.role='user' ORDER BY m.id DESC LIMIT ?""",
                 (user_id, user_id, limit),
             ).fetchall()
         return [{"content": row["content"], "intent": row["intent"] or ""} for row in reversed(rows)]
@@ -467,7 +598,11 @@ class Database:
         with self.connect() as conn:
             conn.execute("""INSERT INTO model_profiles
             (profile_id,name,provider,base_url,model,encrypted_api_key,timeout_seconds,json_mode,disable_thinking)
-            VALUES (:profile_id,:name,:provider,:base_url,:model,:encrypted_api_key,:timeout_seconds,:json_mode,:disable_thinking)""", data)
+            VALUES (?,?,?,?,?,?,?,?,?)""", (
+                data["profile_id"], data["name"], data["provider"], data["base_url"],
+                data["model"], data["encrypted_api_key"], data["timeout_seconds"],
+                data["json_mode"], data["disable_thinking"],
+            ))
 
     def update_model_profile(self, profile_id: str, changes: dict[str, Any]) -> None:
         if not changes: return
@@ -485,7 +620,6 @@ class Database:
 
     def activate_model_profile(self, profile_id: str) -> None:
         with self.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
             conn.execute("UPDATE model_profiles SET is_active=0 WHERE is_active=1")
             conn.execute("UPDATE model_profiles SET is_active=1,updated_at=CURRENT_TIMESTAMP WHERE profile_id=?", (profile_id,))
             conn.commit()

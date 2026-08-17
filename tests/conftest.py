@@ -1,9 +1,40 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import pytest
+
+
+def mysql_test_url(key: object) -> str:
+    admin_url = os.getenv("MYSQL_TEST_ADMIN_URL", "").strip()
+    if not admin_url:
+        pytest.skip("MYSQL_TEST_ADMIN_URL 未配置，跳过 MySQL 集成测试")
+
+    import pymysql
+
+    parsed = urlparse(admin_url.replace("mysql+pymysql://", "mysql://", 1))
+    database_name = "dda_test_" + hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:16]
+    connection = pymysql.connect(
+        host=parsed.hostname,
+        port=parsed.port or 3306,
+        user=unquote(parsed.username or ""),
+        password=unquote(parsed.password or ""),
+        charset="utf8mb4",
+        autocommit=True,
+    )
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"CREATE DATABASE IF NOT EXISTS `{database_name}` "
+                "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+            )
+    finally:
+        connection.close()
+    return parsed._replace(path=f"/{database_name}").geturl()
 
 
 def make_report(
@@ -56,4 +87,3 @@ def data_dir(tmp_path: Path) -> Path:
         json.dumps(make_report(), ensure_ascii=False), encoding="utf-8"
     )
     return directory
-

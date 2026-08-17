@@ -10,7 +10,7 @@ from app.config import Settings
 from app.loader import DataLoadError, load_reports
 from app.main import create_app
 from app.schemas import ModelExtraction
-from conftest import make_report
+from conftest import make_report, mysql_test_url
 
 
 class SequenceExtractor:
@@ -21,16 +21,16 @@ class SequenceExtractor:
         return ModelExtraction.model_validate(self.outputs.pop(0))
 
 
-def _settings(data_dir: Path, database_path: Path) -> Settings:
+def _settings(data_dir: Path, database_key: Path) -> Settings:
     return Settings(
         data_dir=data_dir,
-        database_path=database_path,
         llm_base_url="http://model.test/v1",
         llm_model="test-model",
         llm_api_key="",
         llm_timeout_seconds=1,
         cors_origins=("http://localhost:3000",),
         log_level="INFO",
+        database_url=mysql_test_url(database_key),
     )
 
 
@@ -50,8 +50,8 @@ def test_current_production_sample_loads_all_tags(tmp_path):
 
 
 def test_report_data_is_frozen_until_restart(data_dir, tmp_path):
-    database_path = tmp_path / "frozen.db"
-    settings = _settings(data_dir, database_path)
+    database_key = tmp_path / "frozen"
+    settings = _settings(data_dir, database_key)
     app = create_app(settings, SequenceExtractor([]))
     with TestClient(app) as client:
         before = client.get("/api/v1/reports/report-1").json()
@@ -96,7 +96,7 @@ def test_openapi_has_no_runtime_import_endpoint(data_dir, tmp_path):
 def test_validation_and_not_found_use_error_envelope(data_dir, tmp_path):
     app = create_app(_settings(data_dir, tmp_path / "errors.db"), SequenceExtractor([]))
     with TestClient(app) as client:
-        invalid = client.post("/api/v1/chat", json={"message": "   "})
+        invalid = client.post("/api/v1/chat", json={"session_id": "", "message": "   "})
         missing = client.get("/api/v1/reports/not-found")
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "INVALID_REQUEST"
@@ -108,7 +108,7 @@ def test_recommendation_without_details_returns_immediate_result(data_dir, tmp_p
     outputs = [{"intent": "report_recommendation", "tags": []}]
     app = create_app(_settings(data_dir, tmp_path / "rounds.db"), SequenceExtractor(outputs))
     with TestClient(app) as client:
-        response = client.post("/api/v1/chat", json={"user_id": "user-1", "message": "请推荐报告"})
+        response = client.post("/api/v1/chat", json={"user_id": "user-1", "session_id": "", "message": "请推荐报告"})
         payload = response.json()
     assert payload["status"] == "recommendations"
     assert payload["recommendations"]

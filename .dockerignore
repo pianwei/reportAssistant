@@ -10,3 +10,5 @@ frontend/src
 frontend/public
 output
 .playwright-cli
+release
+deploy/docker/artifacts

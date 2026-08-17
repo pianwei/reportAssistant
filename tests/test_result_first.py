@@ -52,7 +52,7 @@ def _app_with_reports(data_dir, tmp_path, extractor=None):
 def test_no_condition_recommendation_returns_top3(data_dir,tmp_path):
     app=_app_with_reports(data_dir,tmp_path)
     with TestClient(app) as client:
-        payload=client.post("/api/v1/chat",json={"user_id":"u1","message":"推荐报告"}).json()
+        payload=client.post("/api/v1/chat",json={"user_id":"u1","session_id":"","message":"推荐报告"}).json()
     assert payload["status"] == "recommendations"
     assert len(payload["recommendations"]) == 3
 
@@ -62,7 +62,7 @@ def test_rule_extraction_fills_explicit_tag_omitted_by_model(data_dir,tmp_path):
     with TestClient(app) as client:
         payload=client.post(
             "/api/v1/chat",
-            json={"user_id":"rule-fill","message":"给我推荐几个小微企业的报告"},
+            json={"user_id":"rule-fill","session_id":"","message":"给我推荐几个小微企业的报告"},
         ).json()
     assert payload["collected_tags"][0]["name"] == "企业规模"
     assert payload["collected_tags"][0]["value"] == "小微企业"
@@ -75,7 +75,7 @@ def test_explicit_recommendation_keywords_override_model_unsupported(data_dir,tm
     with TestClient(app) as client:
         payload=client.post(
             "/api/v1/chat",
-            json={"user_id":"route-fallback","message":"给我推荐几个小微企业的报告"},
+            json={"user_id":"route-fallback","session_id":"","message":"给我推荐几个小微企业的报告"},
         ).json()
     assert payload["status"] == "recommendations"
     assert payload["collected_tags"][0]["value"] == "小微企业"
@@ -84,8 +84,8 @@ def test_explicit_recommendation_keywords_override_model_unsupported(data_dir,tm
 def test_single_filter_returns_all_and_multiple_tags_are_strict_and(data_dir,tmp_path):
     app=_app_with_reports(data_dir,tmp_path)
     with TestClient(app) as client:
-        one=client.post("/api/v1/chat",json={"user_id":"u1","message":"筛选制造业报告"}).json()
-        two=client.post("/api/v1/chat",json={"user_id":"u2","message":"筛选制造业小微企业报告"}).json()
+        one=client.post("/api/v1/chat",json={"user_id":"u1","session_id":"","message":"筛选制造业报告"}).json()
+        two=client.post("/api/v1/chat",json={"user_id":"u2","session_id":"","message":"筛选制造业小微企业报告"}).json()
     assert one["status"] == "filter_results"
     assert len(one["recommendations"]) == 3
     assert {x["report_id"] for x in two["recommendations"]} == {"r1","r2"}, two
@@ -94,7 +94,7 @@ def test_single_filter_returns_all_and_multiple_tags_are_strict_and(data_dir,tmp
 def test_user_can_replace_filter_conditions_by_sending_a_new_question(data_dir,tmp_path):
     app=_app_with_reports(data_dir,tmp_path)
     with TestClient(app) as client:
-        first=client.post("/api/v1/chat",json={"user_id":"u1","message":"筛选制造业大型企业报告"}).json()
+        first=client.post("/api/v1/chat",json={"user_id":"u1","session_id":"","message":"筛选制造业大型企业报告"}).json()
         session=first["session_id"]
         assert first["recommendations"] == []
         current=client.post("/api/v1/chat",json={"session_id":session,"message":"筛选制造业小微企业报告"}).json()
@@ -105,7 +105,7 @@ def test_same_session_accumulates_fields_and_new_filter_clears_without_results(d
     app=_app_with_reports(data_dir,tmp_path)
     with TestClient(app) as client:
         first=client.post("/api/v1/chat",json={
-            "user_id":"accumulate", "message":"筛选制造业报告",
+            "user_id":"accumulate", "session_id":"", "message":"筛选制造业报告",
         }).json()
         second=client.post("/api/v1/chat",json={
             "session_id":first["session_id"], "message":"再加上小微企业",
@@ -122,13 +122,13 @@ def test_same_session_accumulates_fields_and_new_filter_clears_without_results(d
     assert reset["status"] == "needs_clarification"
     assert reset["assistant_message"] == "你有什么其他想要了解的尽调报告吗？"
     assert reset["collected_tags"] == []
-    assert reset["recommendations"] is None
+    assert reset["recommendations"] == []
 
 
 def test_removed_refinement_action_is_rejected(data_dir,tmp_path):
     app=_app_with_reports(data_dir,tmp_path)
     with TestClient(app) as client:
-        first=client.post("/api/v1/chat",json={"user_id":"u1","message":"筛选制造业报告"}).json()
+        first=client.post("/api/v1/chat",json={"user_id":"u1","session_id":"","message":"筛选制造业报告"}).json()
         response=client.post("/api/v1/chat",json={"session_id":first["session_id"],"action":{"type":"skip_refinement"}})
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "INVALID_REQUEST"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import ssl
 from typing import Protocol
 
 import httpx
@@ -102,6 +103,22 @@ class OpenAICompatibleExtractor:
             return base
         return f"{base}/chat/completions"
 
+    def headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.settings.llm_api_key and self.settings.llm_auth_header:
+            value = self.settings.llm_api_key
+            if self.settings.llm_auth_scheme:
+                value = f"{self.settings.llm_auth_scheme} {value}"
+            headers[self.settings.llm_auth_header] = value
+        return headers
+
+    def tls_verify(self) -> bool | ssl.SSLContext:
+        if not self.settings.llm_tls_verify:
+            return False
+        if self.settings.llm_ca_cert_path:
+            return ssl.create_default_context(cafile=self.settings.llm_ca_cert_path)
+        return True
+
     async def extract(
         self, history: list[dict[str, str]], message: str, expected_tag: str | None = None
     ) -> ModelExtraction:
@@ -123,9 +140,7 @@ class OpenAICompatibleExtractor:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": message},
         ]
-        headers = {"Content-Type": "application/json"}
-        if self.settings.llm_api_key:
-            headers["Authorization"] = f"Bearer {self.settings.llm_api_key}"
+        headers = self.headers()
         payload = {
             "model": self.settings.llm_model,
             "messages": messages,
@@ -140,7 +155,10 @@ class OpenAICompatibleExtractor:
         last_error: Exception | None = None
         for _ in range(2):
             try:
-                async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
+                async with httpx.AsyncClient(
+                    timeout=self.settings.llm_timeout_seconds,
+                    verify=self.tls_verify(),
+                ) as client:
                     response = await client.post(self.endpoint, headers=headers, json=payload)
                 response.raise_for_status()
                 body = response.json()

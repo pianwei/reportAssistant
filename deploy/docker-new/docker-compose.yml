@@ -1,0 +1,61 @@
+services:
+  mysql:
+    image: "${MYSQL_IMAGE:-docker.io/library/mysql:8.4}"
+    container_name: "${MYSQL_CONTAINER_NAME:-due-diligence-mysql}"
+    restart: always
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-due_diligence}"
+      MYSQL_USER: "${MYSQL_USER:-due_diligence}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./database/001-due_diligence-full.sql:/docker-entrypoint-initdb.d/001-due_diligence-full.sql:ro
+    networks:
+      - due-diligence-net
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      start_period: 45s
+      retries: 12
+    security_opt:
+      - no-new-privileges:true
+
+  app:
+    image: "${APP_IMAGE:-docker.io/library/due-diligence-assistant:20260817-mysql-ops-v2}"
+    container_name: "${APP_CONTAINER_NAME:-due-diligence-assistant}"
+    restart: always
+    env_file:
+      - "${APP_ENV_FILE:-.env.intranet}"
+    ports:
+      - "${APP_PORT:-8888}:8720"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - due-diligence-net
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8720/api/v1/health/ready', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      start_period: 45s
+      retries: 6
+
+networks:
+  due-diligence-net:
+    driver: bridge
+
+volumes:
+  mysql-data:

@@ -47,6 +47,8 @@ class ModelManager:
             raise ModelConfigError("MODEL_CONFIG_MASTER_KEY 不是有效的 Fernet 密钥") from exc
 
     def initialize(self) -> None:
+        if not self.settings.model_profile_from_database:
+            return
         profile = self.database.active_model_profile()
         if profile:
             self._set_active_from_profile(profile)
@@ -179,9 +181,9 @@ class ModelManager:
         settings = self._extractor.settings
         if not settings.llm_configured:
             raise LLMError("内网大模型尚未配置")
-        headers = {"Content-Type": "application/json"}
-        if settings.llm_api_key: headers["Authorization"] = f"Bearer {settings.llm_api_key}"
-        endpoint = OpenAICompatibleExtractor(settings).endpoint
+        extractor = OpenAICompatibleExtractor(settings)
+        headers = extractor.headers()
+        endpoint = extractor.endpoint
         payload: dict[str, Any] = {
             "model": settings.llm_model, "messages": messages,
             "temperature": 0, "max_tokens": max_tokens,
@@ -193,7 +195,10 @@ class ModelManager:
         last_error: Exception | None = None
         for _ in range(2):
             try:
-                async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+                async with httpx.AsyncClient(
+                    timeout=settings.llm_timeout_seconds,
+                    verify=extractor.tls_verify(),
+                ) as client:
                     response = await client.post(endpoint, headers=headers, json=payload)
                 response.raise_for_status()
                 return str(response.json()["choices"][0]["message"]["content"]).strip()

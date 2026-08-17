@@ -6,10 +6,12 @@ import OpsApp from './OpsApp.vue'
 import RecommendationCard from '../components/RecommendationCard.vue'
 import ReportResultsGroup from '../components/ReportResultsGroup.vue'
 
-const response = (body: unknown, status = 200) => Promise.resolve({
+const response = (body: unknown, status = 200, headers: Record<string, string> = {}) => Promise.resolve({
   ok: status >= 200 && status < 300,
   status,
   json: () => Promise.resolve(body),
+  headers: new Headers(headers),
+  blob: () => Promise.resolve(new Blob([typeof body === 'string' ? body : JSON.stringify(body)])),
 }) as Promise<Response>
 
 beforeEach(() => {
@@ -44,7 +46,7 @@ describe('移动助手', () => {
     await wrapper.get('.guess-card > button').trigger('click')
     await flushPromises()
     const chatCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/chat'))
-    expect(JSON.parse(String(chatCall?.[1]?.body))).toMatchObject({ user_id: 'demo_12345678' })
+    expect(JSON.parse(String(chatCall?.[1]?.body))).toMatchObject({ user_id: 'demo_12345678', session_id: null })
     expect(wrapper.text()).toContain('请问客户所属行业？')
     expect(wrapper.text()).toContain('问题衍生')
     expect(localStorage.getItem('dda_session_id')).toBe('ses-1')
@@ -112,5 +114,45 @@ describe('运营平台', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('sk-••••1234')
     expect(wrapper.text()).not.toContain('sk-sensitive')
+  })
+
+  it('支持筛选会话并在抽屉中复盘完整消息', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/ops/metrics')) return response({ users: 1, sessions: 1, messages: 2, model_failures: 0, feature_usage: { recommendation: 1 }, recent_conversations: [] })
+      if (url.includes('/ops/model-status')) return response({ profile_name: '环境变量配置', model: 'deepseek-chat', healthy: true, configured: true })
+      if (url.includes('/ops/conversations/s1')) return response({ session_id: 's1', title: '科技企业尽调', user_id: 'u1', feature: 'recommendation', updated_at: '2026-08-17 10:00:00', tags: [], messages: [{ id: 1, role: 'user', intent: 'recommendation', content: '推荐科技企业报告', created_at: '2026-08-17 10:00:00', payload: null }] })
+      if (url.includes('/ops/conversations/export?')) return response('会话ID,消息内容\ns1,推荐科技企业报告', 200, { 'Content-Disposition': 'attachment; filename="conversation-logs-test.csv"' })
+      if (url.includes('/ops/conversations?')) return response({ items: [{ session_id: 's1', title: '科技企业尽调', user_id: 'u1', feature: 'recommendation', message_count: 2, created_at: '2026-08-17 10:00:00', updated_at: '2026-08-17 10:00:00' }], next_cursor: null })
+      throw new Error(`unexpected request ${url}`)
+    })
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:test') })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(OpsApp)
+    await flushPromises()
+    await wrapper.findAll('.ops-sidebar nav button')[1].trigger('click')
+    await flushPromises()
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('days=7'))).toBe(true)
+    const threeDays = wrapper.findAll('.time-filter-option').find(button => button.text().includes('过去 3 天'))!
+    await threeDays.trigger('click')
+    await flushPromises()
+    expect(threeDays.attributes('aria-pressed')).toBe('true')
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('days=3'))).toBe(true)
+    await wrapper.get('input[placeholder="搜索用户消息内容"]').setValue('科技')
+    await wrapper.get('.filter-bar').trigger('submit')
+    await flushPromises()
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('keyword=%E7%A7%91%E6%8A%80'))).toBe(true)
+    await wrapper.get('.export-button').trigger('click')
+    await flushPromises()
+    const exportUrl = String(fetchMock.mock.calls.find(([url]) => String(url).includes('/ops/conversations/export?'))?.[0])
+    expect(exportUrl).toContain('days=3')
+    expect(exportUrl).toContain('keyword=%E7%A7%91%E6%8A%80')
+    expect(exportUrl).not.toContain('limit=')
+    expect(URL.createObjectURL).toHaveBeenCalled()
+    await wrapper.get('.row-action').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('推荐科技企业报告')
+    expect(wrapper.get('.ops-drawer').attributes('role')).toBe('dialog')
   })
 })

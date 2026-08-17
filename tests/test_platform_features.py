@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import sqlite3
+import csv
+import io
 from dataclasses import replace
 
 from cryptography.fernet import Fernet
@@ -34,7 +35,7 @@ def test_user_history_survives_report_rebuild(data_dir, tmp_path):
     settings = settings_for(data_dir, tmp_path)
     app = create_app(settings, EmptyExtractor())
     with TestClient(app) as client:
-        created = client.post("/api/v1/chat", json={"user_id": "alice", "message": "请推荐报告"})
+        created = client.post("/api/v1/chat", json={"user_id": "alice", "session_id": "", "message": "请推荐报告"})
         assert created.status_code == 200
         session_id = created.json()["session_id"]
         owner_conflict = client.post("/api/v1/chat", json={"user_id": "bob", "session_id": session_id, "message": "继续"})
@@ -51,7 +52,7 @@ def test_user_history_survives_report_rebuild(data_dir, tmp_path):
 def test_new_chat_requires_user_id(data_dir, tmp_path):
     app = create_app(settings_for(data_dir, tmp_path), EmptyExtractor())
     with TestClient(app) as client:
-        response = client.post("/api/v1/chat", json={"message": "请推荐报告"})
+        response = client.post("/api/v1/chat", json={"session_id": "", "message": "请推荐报告"})
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "SESSION_USER_ERROR"
 
@@ -63,7 +64,7 @@ def test_unified_filter_statistics_qa_and_ops_metrics(data_dir, tmp_path):
     app.state.model_manager.answer_competition = fake_competition_answer
     with TestClient(app) as client:
         first = client.post("/api/v1/chat", json={
-            "user_id": "alice", "message": "筛选科学研究和技术服务业的报告"
+            "user_id": "alice", "session_id": "", "message": "筛选科学研究和技术服务业的报告"
         }).json()
         search = client.post("/api/v1/chat", json={
             "session_id": first["session_id"], "message": "直接筛选"
@@ -73,12 +74,12 @@ def test_unified_filter_statistics_qa_and_ops_metrics(data_dir, tmp_path):
         assert len(search.json()["recommendations"]) == 1
 
         statistics = client.post("/api/v1/chat", json={
-            "user_id": "alice", "message": "现在有多少篇报告？"
+            "user_id": "alice", "session_id": "", "message": "现在有多少篇报告？"
         }).json()
         assert statistics["status"] == "statistics"
         assert statistics["statistic"]["value"] == 1
 
-        qa = client.post("/api/v1/chat", json={"user_id": "alice", "message": "比赛规则是什么？"})
+        qa = client.post("/api/v1/chat", json={"user_id": "alice", "session_id": "", "message": "比赛规则是什么？"})
         assert qa.status_code == 200
         assert qa.json()["status"] == "answer"
         assert qa.json()["answer"]["official"] is False
@@ -92,6 +93,49 @@ def test_unified_filter_statistics_qa_and_ops_metrics(data_dir, tmp_path):
         assert metrics["feature_usage"]["qa"] == 1
         ops_list = client.get("/api/v1/ops/conversations", params={"keyword": "比赛规则"}).json()
         assert len(ops_list["items"]) == 1
+
+
+def test_ops_history_time_filter_and_csv_export(data_dir, tmp_path):
+    app = create_app(settings_for(data_dir, tmp_path), EmptyExtractor())
+    with TestClient(app) as client:
+        database = app.state.database
+        database.create_session("recent-session", "recent-user", "recommendation")
+        database.add_message(
+            "recent-session", "user", "=SUM(1,1)", intent="recommendation",
+        )
+        database.add_message(
+            "recent-session", "assistant", "当前会话回复", intent="recommendation",
+        )
+        database.create_session("old-session", "old-user", "qa")
+        database.add_message("old-session", "user", "历史比赛规则", intent="qa")
+        with database.connect() as connection:
+            connection.execute(
+                "UPDATE sessions SET created_at=DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 8 DAY), "
+                "updated_at=DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 8 DAY) WHERE session_id=?",
+                ("old-session",),
+            )
+
+        recent_response = client.get("/api/v1/ops/conversations", params={"days": 7})
+        all_time_response = client.get("/api/v1/ops/conversations")
+        invalid = client.get("/api/v1/ops/conversations", params={"days": 2})
+        exported = client.get(
+            "/api/v1/ops/conversations/export",
+            params={"days": 7, "user_id": "recent-user"},
+        )
+
+    assert recent_response.status_code == 200, recent_response.text
+    assert all_time_response.status_code == 200, all_time_response.text
+    recent = recent_response.json()
+    all_time = all_time_response.json()
+    assert {item["session_id"] for item in recent["items"]} == {"recent-session"}
+    assert {item["session_id"] for item in all_time["items"]} == {"recent-session", "old-session"}
+    assert invalid.status_code == 422
+    assert exported.status_code == 200
+    assert exported.headers["content-type"].startswith("text/csv")
+    assert exported.headers["x-export-rows"] == "2"
+    rows = list(csv.DictReader(io.StringIO(exported.content.decode("utf-8-sig"))))
+    assert {row["会话ID"] for row in rows} == {"recent-session"}
+    assert [row["消息内容"] for row in rows] == ["'=SUM(1,1)", "当前会话回复"]
 
 
 def test_suggestions_rotate_across_four_features(data_dir, tmp_path):
@@ -117,7 +161,7 @@ def test_qa_followup_suggestions_only_contain_competition_questions(data_dir, tm
     app.state.model_manager.answer_competition = fake_competition_answer
     with TestClient(app) as client:
         answer = client.post("/api/v1/chat", json={
-            "user_id": "alice", "message": "比赛规则是什么？",
+            "user_id": "alice", "session_id": "", "message": "比赛规则是什么？",
         }).json()
         suggestions = client.post("/api/v1/suggestions", json={
             "user_id": "alice", "session_id": answer["session_id"],
@@ -133,7 +177,7 @@ def test_report_flow_suggestions_include_reset_action(data_dir, tmp_path):
     app = create_app(settings_for(data_dir, tmp_path), RoutingExtractor())
     with TestClient(app) as client:
         first = client.post("/api/v1/chat", json={
-            "user_id": "flow-suggestions", "message": "筛选小微企业报告",
+            "user_id": "flow-suggestions", "session_id": "", "message": "筛选小微企业报告",
         }).json()
         suggestions = client.post("/api/v1/suggestions", json={
             "user_id": "flow-suggestions", "session_id": first["session_id"],
@@ -145,7 +189,7 @@ def test_report_flow_suggestions_include_reset_action(data_dir, tmp_path):
 def test_finish_without_tags_uses_completeness_ranking(data_dir, tmp_path):
     app = create_app(settings_for(data_dir, tmp_path), EmptyExtractor())
     with TestClient(app) as client:
-        first = client.post("/api/v1/chat", json={"user_id": "alice", "message": "给我推荐几个优秀报告"}).json()
+        first = client.post("/api/v1/chat", json={"user_id": "alice", "session_id": "", "message": "给我推荐几个优秀报告"}).json()
         assert first["status"] == "recommendations"
         finished = client.post("/api/v1/chat", json={
             "session_id": first["session_id"], "message": "按现有信息生成"
@@ -180,10 +224,7 @@ def test_model_profile_key_is_encrypted_and_never_returned(data_dir, tmp_path):
         assert "encrypted_api_key" not in profile
         assert profile["api_key_masked"].startswith("sk-")
 
-        with sqlite3.connect(settings.database_path) as conn:
-            stored = conn.execute(
-                "SELECT encrypted_api_key FROM model_profiles WHERE profile_id=?", (profile_id,)
-            ).fetchone()[0]
+        stored = app.state.database.get_model_profile(profile_id)["encrypted_api_key"]
         assert stored != secret
         assert secret not in stored
 

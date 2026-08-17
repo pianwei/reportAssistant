@@ -23,7 +23,7 @@
       "request": {
         "method": "POST",
         "header": [{"key": "Content-Type", "value": "application/json"}],
-        "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"message\": \"请推荐适合科学研究和技术服务业小微企业的尽调报告\"\n}"},
+        "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"session_id\": \"\",\n  \"message\": \"请推荐适合科学研究和技术服务业小微企业的尽调报告\"\n}"},
         "url": "{{base_url}}/chat"
       }
     },

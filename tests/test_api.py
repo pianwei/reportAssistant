@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.schemas import ModelExtraction
+from conftest import mysql_test_url
 
 
 class FakeExtractor:
@@ -20,14 +21,39 @@ class FakeExtractor:
 def settings_for(data_dir, tmp_path) -> Settings:
     return Settings(
         data_dir=data_dir,
-        database_path=tmp_path / "runtime" / "test.db",
         llm_base_url="http://model.test/v1",
         llm_model="test-model",
         llm_api_key="",
         llm_timeout_seconds=1,
         cors_origins=("http://localhost:3000",),
         log_level="INFO",
+        database_url=mysql_test_url(tmp_path),
     )
+
+
+def test_chat_contract_requires_session_id_and_returns_recommendations_array(data_dir, tmp_path):
+    app = create_app(settings_for(data_dir, tmp_path), FakeExtractor([]))
+    with TestClient(app) as client:
+        missing = client.post(
+            "/api/v1/chat",
+            json={"user_id": "missing-session", "message": "你好"},
+        )
+        empty_string = client.post(
+            "/api/v1/chat",
+            json={"user_id": "empty-session", "session_id": "", "message": "你好"},
+        )
+        null_value = client.post(
+            "/api/v1/chat",
+            json={"user_id": "null-session", "session_id": None, "message": "你好"},
+        )
+        chat_schema = client.get("/openapi.json").json()["components"]["schemas"]["ChatRequest"]
+
+    assert missing.status_code == 422
+    assert "session_id" in chat_schema["required"]
+    assert empty_string.status_code == 200
+    assert null_value.status_code == 200
+    assert empty_string.json()["recommendations"] == []
+    assert null_value.json()["recommendations"] == []
 
 
 def test_health_and_report_detail(data_dir, tmp_path):
@@ -60,7 +86,7 @@ def test_model_and_rules_agree_can_return_recommendation_in_one_turn(data_dir, t
     with TestClient(app) as client:
         response = client.post(
             "/api/v1/chat",
-            json={"user_id": "user-1", "message": message},
+            json={"user_id": "user-1", "session_id": "", "message": message},
         )
         payload = response.json()
         assert response.status_code == 200
@@ -90,7 +116,7 @@ def test_result_first_does_not_force_an_expected_tag(data_dir, tmp_path):
     )
     app = create_app(settings_for(data_dir, tmp_path), extractor)
     with TestClient(app) as client:
-        first = client.post("/api/v1/chat", json={"user_id": "user-1", "message": "请推荐报告"}).json()
+        first = client.post("/api/v1/chat", json={"user_id": "user-1", "session_id": "", "message": "请推荐报告"}).json()
         second = client.post(
             "/api/v1/chat",
             json={"session_id": first["session_id"], "message": "300万元"},
@@ -127,7 +153,7 @@ def test_rule_only_explicit_amount_is_used_without_confirmation(data_dir, tmp_pa
     app = create_app(settings_for(data_dir, tmp_path), extractor)
     with TestClient(app) as client:
         first = client.post(
-            "/api/v1/chat", json={"user_id": "user-1", "message": message}
+            "/api/v1/chat", json={"user_id": "user-1", "session_id": "", "message": message}
         ).json()
     assert first["status"] == "recommendations"
     assert first["recommendations"]

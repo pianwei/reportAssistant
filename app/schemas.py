@@ -88,9 +88,18 @@ class ChatAction(BaseModel):
 
 class ChatRequest(BaseModel):
     user_id: str | None = Field(default=None, min_length=1, max_length=64)
-    session_id: str | None = Field(default=None, min_length=1, max_length=64)
+    # The field is part of every chat request. An empty value starts a new
+    # session; a non-empty value continues an existing session.
+    session_id: str | None = Field(max_length=64)
     message: str | None = Field(default=None, max_length=10000)
     action: ChatAction | None = None
+
+    @field_validator("session_id")
+    @classmethod
+    def normalize_session_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 
     @field_validator("message")
     @classmethod
@@ -193,7 +202,7 @@ class ChatResponse(BaseModel):
     collected_tags: list[CollectedTag]
     information_incomplete: bool = False
     question: ClarificationQuestion | None = None
-    recommendations: list[Recommendation] | None = None
+    recommendations: list[Recommendation] = Field(default_factory=list)
     statistic: StatisticResult | None = None
     answer: AnswerResult | None = None
 

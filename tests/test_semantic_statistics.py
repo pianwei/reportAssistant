@@ -77,7 +77,7 @@ def test_semantic_statistics_sends_complete_tag_snapshot_and_validates_ids(data_
     app.state.model_manager.match_reports_from_tags = fake_match
     with TestClient(app) as client:
         payload = client.post("/api/v1/chat", json={
-            "user_id": "stats-user", "message": "科技企业的报告有几篇？",
+            "user_id": "stats-user", "session_id": "", "message": "科技企业的报告有几篇？",
         }).json()
 
     assert payload["status"] == "statistics"
@@ -102,7 +102,7 @@ def test_amount_statistics_uses_exact_backend_comparison(data_dir, tmp_path):
     app.state.model_manager.match_reports_from_tags = fake_match
     with TestClient(app) as client:
         payload = client.post("/api/v1/chat", json={
-            "user_id": "stats-user", "message": "授信额度大于200万的报告有几篇？",
+            "user_id": "stats-user", "session_id": "", "message": "授信额度大于200万的报告有几篇？",
         }).json()
 
     assert payload["status"] == "statistics"
@@ -123,12 +123,12 @@ def test_conditional_count_overrides_wrong_model_intent_and_returns_count_only(d
     app.state.model_manager.match_reports_from_tags = fake_match
     with TestClient(app) as client:
         payload = client.post("/api/v1/chat", json={
-            "user_id": "intent-user", "message": "科技行业有几篇报告",
+            "user_id": "intent-user", "session_id": "", "message": "科技行业有几篇报告",
         }).json()
 
     assert payload["intent"] == "statistics"
     assert payload["status"] == "statistics"
-    assert payload["recommendations"] is None
+    assert payload["recommendations"] == []
     assert payload["statistic"]["value"] == 2
     assert payload["assistant_message"] == "共找到 2 份符合条件的报告。"
 
@@ -157,7 +157,7 @@ def test_small_enterprise_count_uses_ids_from_single_full_snapshot_analysis(data
     app.state.model_manager.match_reports_from_tags = match_all_at_once
     with TestClient(app) as client:
         payload = client.post("/api/v1/chat", json={
-            "user_id": "stats-user", "message": "小微企业的尽调报告有几篇",
+            "user_id": "stats-user", "session_id": "", "message": "小微企业的尽调报告有几篇",
         }).json()
 
     assert payload["status"] == "statistics"
@@ -177,7 +177,7 @@ def test_failed_condition_analysis_is_not_reported_as_zero(data_dir, tmp_path):
     app.state.model_manager.match_reports_from_tags = failed_analysis
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.post("/api/v1/chat", json={
-            "user_id": "stats-user", "message": "科技企业的尽调报告有几篇",
+            "user_id": "stats-user", "session_id": "", "message": "科技企业的尽调报告有几篇",
         })
 
     assert response.status_code == 503
@@ -188,7 +188,7 @@ def test_report_listing_routes_to_filter_and_applies_exact_amount_comparison(dat
     app = _app(data_dir, tmp_path, WrongIntentExtractor())
     with TestClient(app) as client:
         payload = client.post("/api/v1/chat", json={
-            "user_id": "filter-user", "message": "授信金额大于200万的报告有哪些",
+            "user_id": "filter-user", "session_id": "", "message": "授信金额大于200万的报告有哪些",
         }).json()
 
     assert payload["intent"] == "filter"

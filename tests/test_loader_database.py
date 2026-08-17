@@ -6,7 +6,7 @@ import pytest
 
 from app.database import Database
 from app.loader import DataLoadError, load_reports
-from conftest import make_report
+from conftest import make_report, mysql_test_url
 
 
 def test_load_single_report_and_rebuild_database(data_dir, tmp_path):
@@ -14,7 +14,7 @@ def test_load_single_report_and_rebuild_database(data_dir, tmp_path):
     assert len(loaded) == 1
     assert len(loaded[0].report.tag_collection.tags) == 2
 
-    database = Database(tmp_path / "runtime" / "app.db")
+    database = Database(mysql_test_url(tmp_path / "runtime" / "reports"))
     assert database.rebuild(loaded) == (1, 2)
     assert database.counts() == (1, 2)
 
@@ -53,7 +53,7 @@ def test_invalid_declared_tag_count_rejected(data_dir):
 
 
 def test_rebuild_replaces_previous_startup_state(data_dir, tmp_path):
-    database = Database(tmp_path / "app.db")
+    database = Database(mysql_test_url(tmp_path / "reports"))
     first = [make_report("first", "报告甲"), make_report("second", "报告乙")]
     (data_dir / "report.json").write_text(json.dumps(first, ensure_ascii=False), encoding="utf-8")
     database.rebuild(load_reports(data_dir))
@@ -65,4 +65,3 @@ def test_rebuild_replaces_previous_startup_state(data_dir, tmp_path):
     assert database.counts() == (1, 2)
     assert database.get_report("first") is None
     assert database.get_report("second")["report_name"] == "报告乙-新版本"
-

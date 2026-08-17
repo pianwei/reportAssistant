@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings
@@ -43,7 +46,7 @@ def _error(request: Request, status: int, code: str, message: str, retryable: bo
 
 def create_app(settings: Settings | None = None, extractor: Extractor | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
-    database = Database(settings.database_path)
+    database = Database(settings.database_url)
     model_manager = ModelManager(settings, database)
 
     @asynccontextmanager
@@ -168,8 +171,45 @@ def create_app(settings: Settings | None = None, extractor: Extractor | None = N
     @app.get("/api/v1/ops/conversations")
     async def ops_conversations(user_id: str | None = None, limit: int = 20,
                                 cursor: str | None = None, feature: str | None = None,
-                                keyword: str | None = None):
-        return database.list_conversations(user_id, limit, cursor, feature, keyword)
+                                keyword: str | None = None,
+                                days: Literal["1", "3", "7", "30"] | None = None):
+        day_count = int(days) if days else None
+        return database.list_conversations(user_id, limit, cursor, feature, keyword, day_count)
+
+    @app.get("/api/v1/ops/conversations/export")
+    async def export_ops_conversations(user_id: str | None = None,
+                                       feature: str | None = None,
+                                       keyword: str | None = None,
+                                       days: Literal["1", "3", "7", "30"] | None = None):
+        day_count = int(days) if days else None
+        rows = database.export_conversation_messages(user_id, feature, keyword, day_count)
+        output = io.StringIO(newline="")
+        writer = csv.writer(output)
+        writer.writerow([
+            "会话ID", "会话标题", "用户ID", "会话功能", "会话开始时间", "会话更新时间",
+            "消息ID", "消息角色", "消息意图", "消息类型", "请求ID", "消息时间", "消息内容", "消息载荷JSON",
+        ])
+
+        def safe(value: object) -> object:
+            if not isinstance(value, str):
+                return "" if value is None else value
+            return "'" + value if value.startswith(("=", "+", "-", "@")) else value
+
+        for row in rows:
+            writer.writerow([safe(row.get(key)) for key in (
+                "session_id", "title", "user_id", "feature", "session_created_at", "session_updated_at",
+                "message_id", "role", "intent", "message_type", "request_id", "message_created_at",
+                "content", "payload_json",
+            )])
+        filename = f"conversation-logs-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
+        return Response(
+            content=("\ufeff" + output.getvalue()).encode("utf-8"),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-Export-Rows": str(len(rows)),
+            },
+        )
 
     @app.get("/api/v1/ops/conversations/{session_id}")
     async def ops_conversation_detail(session_id: str):
@@ -233,6 +273,25 @@ def create_app(settings: Settings | None = None, extractor: Extractor | None = N
             "tag_count": tag_count,
             "model_source": model_manager.status()["source"],
         }
+
+    @app.get("/api/v1/health/live", include_in_schema=False)
+    async def liveness():
+        return {"status": "alive"}
+
+    @app.get("/api/v1/health/ready", include_in_schema=False)
+    async def readiness():
+        data_loaded = bool(getattr(app.state, "data_loaded", False))
+        model_configured = model_manager.status()["configured"]
+        if not data_loaded or not model_configured:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "not_ready",
+                    "data_loaded": data_loaded,
+                    "model_configured": model_configured,
+                },
+            )
+        return {"status": "ready"}
 
     @app.api_route(
         "/api/{full_path:path}", methods=["GET", "POST", "PATCH", "DELETE"],

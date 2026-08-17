@@ -14,4 +14,14 @@ frontend/coverage/
 ops-basic-auth-password.txt
 deploy/xanadu/.ui-release-staging-*/
 deploy/xanadu/*.tar.gz
+deploy/intranet/.env.intranet
+deploy/intranet/runtime/
+deploy/docker/artifacts/
 前端UI.zip
+.superdesign/
+.private-release-upload/
+deploy/docker-new/images/
+deploy/docker-new/artifacts/
+deploy/docker-new/SHA256SUMS
+deploy/intranet/artifacts/
+deploy/intranet/python-runtime/

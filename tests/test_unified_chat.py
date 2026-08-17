@@ -44,7 +44,7 @@ def test_explicit_intent_switch_marks_session_mixed(data_dir, tmp_path):
     app = create_app(settings_for(data_dir, tmp_path), IntentExtractor())
     with TestClient(app) as client:
         first = client.post("/api/v1/chat", json={
-            "user_id": "alice", "message": "推荐几个报告"
+            "user_id": "alice", "session_id": "", "message": "推荐几个报告"
         }).json()
         switched = client.post("/api/v1/chat", json={
             "session_id": first["session_id"], "message": "现在统计有多少篇报告"
@@ -68,7 +68,7 @@ def test_keyword_router_falls_back_when_model_is_unavailable(data_dir, tmp_path)
     app = create_app(settings_for(data_dir, tmp_path), FailingExtractor())
     with TestClient(app) as client:
         response = client.post("/api/v1/chat", json={
-            "user_id": "alice", "message": "现在有多少篇报告？"
+            "user_id": "alice", "session_id": "", "message": "现在有多少篇报告？"
         })
     assert response.status_code == 200
     assert response.json()["intent"] == "statistics"
@@ -89,7 +89,7 @@ def test_intent_extractor_receives_only_the_latest_five_rounds(data_dir, tmp_pat
     with TestClient(app) as client:
         session_id = None
         for index in range(1, 8):
-            body = {"message": f"推荐报告，第{index}轮"}
+            body = {"session_id": session_id or "", "message": f"推荐报告，第{index}轮"}
             if session_id:
                 body["session_id"] = session_id
             else:
@@ -116,7 +116,7 @@ def test_provide_information_continues_statistics_intent(data_dir, tmp_path):
     app.state.feature_service.statistics_for_question = fake_statistics
     with TestClient(app) as client:
         first = client.post("/api/v1/chat", json={
-            "user_id": "alice", "message": "统计报告数量",
+            "user_id": "alice", "session_id": "", "message": "统计报告数量",
         }).json()
         followup = client.post("/api/v1/chat", json={
             "session_id": first["session_id"], "message": "那小微企业呢",
@@ -131,7 +131,7 @@ def test_greeting_uses_fixed_capability_message_without_model_routing(data_dir, 
     app = create_app(settings_for(data_dir, tmp_path), IntentExtractor())
     with TestClient(app) as client:
         response = client.post("/api/v1/chat", json={
-            "user_id": "alice", "message": "您好"
+            "user_id": "alice", "session_id": "", "message": "您好"
         }).json()
     assert response["status"] == "greeting"
     assert response["intent"] == "greeting"
@@ -142,7 +142,7 @@ def test_unsupported_question_is_politely_rejected(data_dir, tmp_path):
     app = create_app(settings_for(data_dir, tmp_path), IntentExtractor())
     with TestClient(app) as client:
         response = client.post("/api/v1/chat", json={
-            "user_id": "alice", "message": "今天天气如何？"
+            "user_id": "alice", "session_id": "", "message": "今天天气如何？"
         }).json()
     assert response["status"] == "unsupported"
     assert "超出了我目前的回答范围" in response["assistant_message"]
@@ -157,7 +157,7 @@ def test_competition_qa_requires_explicit_competition_context(data_dir, tmp_path
     app = create_app(settings_for(data_dir, tmp_path), MisclassifiedQA())
     with TestClient(app) as client:
         response = client.post("/api/v1/chat", json={
-            "user_id": "alice", "message": "量子计算是什么？"
+            "user_id": "alice", "session_id": "", "message": "量子计算是什么？"
         }).json()
     assert response["status"] == "unsupported"
 
@@ -170,6 +170,7 @@ def test_related_reports_excludes_source_report(data_dir, tmp_path):
     with TestClient(app) as client:
         first = client.post("/api/v1/chat", json={
             "user_id": "alice",
+            "session_id": "",
             "message": "推荐科学研究和技术服务业申请300万元的报告",
         }).json()
         related = client.post("/api/v1/chat", json={

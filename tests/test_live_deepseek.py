@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from conftest import mysql_test_url
 
 
 pytestmark = [
@@ -22,7 +23,7 @@ def _live_settings(tmp_path: Path) -> Settings:
     return replace(
         Settings.from_env(),
         data_dir=root / "data",
-        database_path=tmp_path / "live.db",
+        database_url=mysql_test_url(tmp_path / "live.db"),
     )
 
 
@@ -33,6 +34,7 @@ def test_live_single_turn_recommendation(tmp_path):
             "/api/v1/chat",
             json={
                 "user_id": "live-single",
+                "session_id": "",
                 "message": "请推荐一份适合科学研究和技术服务业小微企业的尽调报告，申请300万元流动资金贷款"
             },
         )
@@ -49,7 +51,7 @@ def test_live_multiturn_expected_tag(tmp_path):
     with TestClient(app) as client:
         first = client.post(
             "/api/v1/chat", json={
-                "user_id": "live-multiturn", "message": "帮我推荐一份流动资金贷款相关报告",
+                "user_id": "live-multiturn", "session_id": "", "message": "帮我推荐一份流动资金贷款相关报告",
             }
         ).json()
         assert first["status"] == "recommendations"
@@ -68,6 +70,7 @@ def test_live_amount_disagreement_uses_model_value_without_confirmation(tmp_path
             "/api/v1/chat",
             json={
                 "user_id": "live-amount",
+                "session_id": "",
                 "message": "请推荐报告：公司最新一期财报总资产300万元，本次计划申请100万元流动资金贷款"
             },
         ).json()
